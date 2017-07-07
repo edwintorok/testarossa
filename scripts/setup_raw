@@ -9,7 +9,6 @@ systemctl stop pcsd
 cat >/etc/corosync/corosync.conf <<EOF
 totem {
     version: 2
-    secauth: off
     cluster_name: cluster
     transport: udpu
 }

@@ -43,8 +43,8 @@ type sr_type = NFS | ISCSI
 let update_box name =
   ?| (Printf.sprintf "vagrant box update %s" name)
 
-let start_all m =
-  let hosts = Array.init m (fun i -> i+1) |> Array.to_list |> List.map (Printf.sprintf "host%d") in
+let start_all prefix m =
+  let hosts = Array.init m (fun i -> i+1) |> Array.to_list |> List.map (Printf.sprintf "%s%d" prefix) in
   ?| (Printf.sprintf "vagrant up %s infrastructure --parallel --provider=xenserver" (String.concat " " hosts))
 
 
@@ -54,15 +54,57 @@ let setup_infra () =
   {iscsi_iqn=wwn; storage_ip=ip}
 
 
-let get_hosts m =
+let get_hosts prefix m =
   let get_host n =
     match
-      ?|> "vagrant ssh host%d -c \"/scripts/get_public_ip.sh\"" n |> trim |> Stringext.split ~on:','
+      ?|> "vagrant ssh %s%d -c \"/scripts/get_public_ip.sh\"" prefix n |> trim |> Stringext.split ~on:','
     with
-    | [uuid; ip] -> {name=(Printf.sprintf "host%d" n); ip; uuid}
+    | [uuid; ip] -> {name=(Printf.sprintf "%s%d" prefix n); ip; uuid}
     | _ -> failwith "Failed to get host's uuid and IP"
   in
   List.map get_host (Array.init m (fun i -> i+1) |> Array.to_list)
+
+let lwt_read file = Lwt_io.lines_of_file file |> Lwt_stream.to_list
+let get_ref name = lwt_read (Printf.sprintf ".vagrant/machines/%s/xenserver/id" name) >|= List.hd
+
+let get_vm_ref prefix i =
+  get_ref (Printf.sprintf "%s%d" prefix i)
+
+let snapshot_all prefix m =
+  let rpc = make (uri "perfuk-01-10.xenrt.citrite.net") in
+  Session.login_with_password rpc !username !password "1.0" "testarossa" >>=
+  fun session_id ->
+  let snapshot_host name =
+    get_ref name >>= fun vm ->
+    VM.shutdown ~rpc ~session_id ~vm >>= fun () ->
+    VM.snapshot ~rpc ~session_id ~vm ~new_name:"testarossa_clean"
+  in
+  "infrastructure" ::
+  (Array.init m (fun i -> Printf.sprintf "%s%d" prefix (i+1)) |> Array.to_list) |>
+  Lwt_list.map_p snapshot_host
+
+let revert_all prefix m =
+  let rpc = make (uri "perfuk-01-10.xenrt.citrite.net") in
+  Session.login_with_password rpc !username !password "1.0" "testarossa" >>=
+  fun session_id ->
+
+  let is_ours snapshot =
+    VM.get_name_label ~rpc ~session_id ~self:snapshot >|= fun name ->
+    name = "testarossa_clean"
+  in
+
+  let revert_host name =
+    get_ref name >>= fun vm ->
+    echo "Getting list of snapshot for VM %s" vm;
+    VM.get_snapshots ~rpc ~session_id ~self:vm >>= fun snapshots ->
+    Lwt_list.filter_p is_ours snapshots >>= fun snapshots ->
+    let snapshot = List.hd snapshots in
+    echo "Reverting VM %s to clean snapshot %s" vm snapshot;
+    VM.revert ~rpc ~session_id ~snapshot
+  in
+  "infrastructure" ::
+  (Array.init m (fun i -> Printf.sprintf "%s%d" prefix (i+1)) |> Array.to_list) |>
+  Lwt_list.iter_p revert_host
 
 
 let get_state hosts =

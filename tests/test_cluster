@@ -1,0 +1,77 @@
+#!/usr/bin/env ocamlscript
+Ocaml.packs := ["lwt"; "xen-api-client.lwt"; "cmdliner"; "re"; "ezxmlm"];
+Ocaml.sources := ["../scripts/yorick.ml"; "test_common.ml"]
+--
+
+open Yorick
+open Lwt
+open Xen_api
+open Xen_api_lwt_unix
+open Test_common
+
+let n = 3
+
+let main skip reset =
+  let prepare () =
+    echo "Updating vagrant box to latest version";
+    update_box "cluster1";
+    echo "Starting up cluster";
+    start_all "cluster" n;
+    echo "Snapshotting all VMs";
+    snapshot_all "cluster" n >>= fun _ ->
+    echo "Starting up cluster";
+    start_all "cluster" n;
+    Lwt.return ()
+  in
+
+  let reset_vms () =
+    echo "Reseting all cluster & infrastructure VMs to snapshot";
+    revert_all "cluster" n >>= fun () ->
+    start_all "cluster" n;
+    Lwt.return ()
+  in
+
+  let th =
+    begin if not skip then
+      if reset then
+        reset_vms ()
+      else
+        prepare ()
+      else Lwt.return ()
+    end >>= fun () ->
+    Lwt.return ()
+(*    echo "Running quicktest...";
+    match !?* (?|>) "%s" quicktest_cmd with
+    | (_, 0) ->
+      echo "Quicktest finished successfully!";
+      Lwt.return ();
+    | (stdout, rc) ->
+      echo "---[ BEGIN OUTPUT FROM QUICKTEST ]---";
+      echo "%s" (trim stdout);
+      echo "---[  END OUTPUT FROM QUICKTEST  ]---";
+      echo "Quicktest failed (exit code %d)" rc;
+      exit rc;*)
+  in
+  (* TODO: kill child processes too! *)
+  (* TODO: even on failure run selfdestruct *)
+  run_and_self_destruct th;
+
+open Cmdliner
+
+let skip_arg =
+  let doc = "Assume VMs are already up, skip provisioning and starting" in
+  Arg.(value & flag & info ["skip"] ~doc)
+
+let reset_arg =
+  let doc = "Reset all test VMs to snapshot" in
+  Arg.(value & flag & info ["reset"] ~doc)
+
+let main_t = Term.(pure main $ skip_arg $ reset_arg)
+
+let info =
+  let doc = "Run pcs cluster test" in
+  let man = [ `S "BUGS"; `P "Report bug on the github issue tracker" ] in
+  Term.info "test_cluster" ~version:"0.1" ~doc ~man
+
+let () =
+  Term.exit @@ Term.eval (main_t, info)

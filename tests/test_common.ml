@@ -71,7 +71,7 @@ let get_vm_ref prefix i =
   get_ref (Printf.sprintf "%s%d" prefix i)
 
 let snapshot_all prefix m =
-  let rpc = make (uri "perfuk-01-10.xenrt.citrite.net") in
+  let rpc = make (uri "gandalf.uk.xensource.com") in
   Session.login_with_password rpc !username !password "1.0" "testarossa" >>=
   fun session_id ->
   let snapshot_host name =
@@ -84,7 +84,7 @@ let snapshot_all prefix m =
   Lwt_list.map_p snapshot_host
 
 let revert_all prefix m =
-  let rpc = make (uri "perfuk-01-10.xenrt.citrite.net") in
+  let rpc = make (uri "gandalf.uk.xensource.com") in
   Session.login_with_password rpc !username !password "1.0" "testarossa" >>=
   fun session_id ->
 

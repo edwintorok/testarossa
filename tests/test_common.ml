@@ -46,10 +46,15 @@ let update_box name =
 let start_all prefix m =
   let hosts = Array.init m (fun i -> i+1) |> Array.to_list |> List.map (Printf.sprintf "%s%d" prefix) in
   let hosts = String.concat " " hosts in
+  ?| (Printf.sprintf "vagrant up %s infrastructure --parallel --provider=xenserver" hosts)
+    
+let initialize_all prefix m =
+  let hosts = Array.init m (fun i -> i+1) |> Array.to_list |> List.map (Printf.sprintf "%s%d" prefix) in
+  let hosts = String.concat " " hosts in
   (* assuming we only have ansible and shell provisioners *)
   ?| (Printf.sprintf "vagrant up %s infrastructure --parallel --provider=xenserver --provision-with=shell" hosts);
   (* ansible requires all hosts to be up already *)
-  ?| (Printf.sprintf "vagrant provision infrastructure %s --provision-with=ansible" hosts)
+  ?| (Printf.sprintf "vagrant up %s infrastructure --provision-with=ansible" hosts)
 
 let destroy_all prefix m =
   let hosts = Array.init m (fun i -> i+1) |> Array.to_list |> List.map (Printf.sprintf "%s%d" prefix) in
@@ -64,6 +69,9 @@ let setup_infra () =
   let ip = ?|> "vagrant ssh infrastructure -c \"/scripts/get_ip.sh\"" |> trim in
   {iscsi_iqn=wwn; storage_ip=ip}
 
+let run_script ~host ~script =
+  echo "Running %S on %s" script host;
+  ?| (Printf.sprintf "vagrant ssh %s -c \"sudo /scripts/%s\"" host script)
 
 let get_hosts prefix m =
   let get_host n =
@@ -81,14 +89,21 @@ let get_ref name = lwt_read (Printf.sprintf ".vagrant/machines/%s/xenserver/id" 
 let get_vm_ref prefix i =
   get_ref (Printf.sprintf "%s%d" prefix i)
 
-let snapshot_all prefix m ~new_name =
+let snapshot_all prefix ?(consistent=false) m ~new_name =
   let rpc = make (uri "perfuk-01-10.xenrt.citrite.net") in
   Session.login_with_password rpc !username !password "1.0" "testarossa" >>=
   fun session_id ->
   let snapshot_host name =
     get_ref name >>= fun vm ->
-    VM.shutdown ~rpc ~session_id ~vm >>= fun () ->
-    VM.snapshot ~rpc ~session_id ~vm ~new_name
+    begin if consistent then
+      VM.shutdown ~rpc ~session_id ~vm
+    else Lwt.return_unit
+    end >>= fun () ->
+    VM.snapshot ~rpc ~session_id ~vm ~new_name >>= fun id ->
+    if consistent then
+      VM.start ~rpc ~session_id ~vm ~start_paused:false ~force:false >>= fun () ->
+      Lwt.return id
+    else Lwt.return id
   in
   "infrastructure" ::
   (Array.init m (fun i -> Printf.sprintf "%s%d" prefix (i+1)) |> Array.to_list) |>

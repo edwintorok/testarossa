@@ -20,14 +20,23 @@ let update_box () =
 
 type reset_mode = Force | Snapshot
 let reset_vms reset_mode =
+  (* TODO: determine current state, check whether we should start/stop/etc.
+     whether snapshot already exists, etc *)
     begin if reset_mode = Snapshot then
       let new_name = Printf.sprintf "before reset %f" (Unix.gettimeofday ()) in
+      (* start wouldn't be needed, but vagrant needs to know about the VM, it must be created at least *)
+      echo "Starting all VMs";
+      start_all "cluster" n;
       echo "Snapshotting VMs before reset";
       snapshot_all "cluster" n ~new_name
     else
       Lwt.return []
-    end >>= fun _ ->
+  end >>= fun _ ->
     echo "Reseting all cluster & infrastructure VMs to snapshot";
+    (* TODO: put unique id that identifies this cluster with this many nodes, timestamp etc.
+       so we are sure we restore the right snapshot
+
+    *)
     revert_all "cluster" n ~snapshot_name >>= fun () ->
     start_all "cluster" n;
     Lwt.return_unit
@@ -36,14 +45,46 @@ let prepare () =
   echo "Starting up cluster";
   (* TODO: infrastructure needs to be started before cluster,
      or remove provisioninig dependency *)
-  start_all "cluster" n;
+  initialize_all "cluster" n;
   echo "Snapshotting all VMs";
-  snapshot_all "cluster" n ~new_name:snapshot_name >>= fun _ ->
-  echo "Starting up cluster";
-  start_all "cluster" n;
+  snapshot_all "cluster" n ~consistent:true ~new_name:snapshot_name >>= fun _ ->
   Lwt.return_unit
 
+let sequential_join_remove () =
+  echo "Setting up cluster on 1st node";
+  run_script ~host:"cluster1" ~script:"setup_cluster_one.sh";
 
+  echo "Joining nodes sequentially";
+  for i = 2 to n do
+    let node = Printf.sprintf "cluster%d" i in
+    run_script ~host:node ~script:"destroy_cluster.sh";
+    run_script ~host:"cluster1" ~script:("join_cluster.sh " ^ node);
+  done
+  (* TODO: when taking clean snapshots make sure they are all shut down
+     and take aa consistent snapshot of the whole cluster then *) 
+
+ (* TODO: sanity checks pcs cluster status consistent, etc.
+  had iptables problems where online/offline was not consistent
+ *)
+
+  (* TODO: assert all nodes are up and didn't fence *)
+
+  (*  TODO: in parallel *)
+
+  (* might be useful to snapshot here!
+     or have automatic snapshotting based on states we want to reach
+  *)
+(*
+  echo "Removing nodes sequentially";
+  let last = Printf.sprintf "cluster%d" n in
+  for i = 1 to n-1 do
+    let node = Printf.sprintf "cluster%d" i in
+    run_script ~host:last ~script:("remove_node.sh " ^ node);
+  done*)
+
+let run_test () =
+  sequential_join_remove ();
+  Lwt.return_unit
 (*    echo "Running quicktest...";
     match !?* (?|>) "%s" quicktest_cmd with
     | (_, 0) ->
@@ -63,7 +104,7 @@ let main update mode =
   kill_children_at_exit ();
   if update then
     update_box ();
-  run_and_self_destruct @@ match mode with
+  run_and_self_destruct (begin match mode with
   | Some (Reset reset_mode) ->
     reset_vms reset_mode
   | Some Recreate ->
@@ -80,6 +121,8 @@ let main update mode =
   | None ->
     prepare ()
   | Some Skip ->  Lwt.return_unit
+  end >>= fun () ->
+  run_test ())
 
 open Cmdliner
 

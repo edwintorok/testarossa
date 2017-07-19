@@ -9,37 +9,41 @@ open Xen_api
 open Xen_api_lwt_unix
 open Test_common
 
-let n = 3
+let n = 16 (* TODO: match vagrantfile *)
 
-let main skip reset =
-  let prepare () =
-    echo "Updating vagrant box to latest version";
-    update_box "cluster1";
-    echo "Starting up cluster";
-    start_all "cluster" n;
-    echo "Snapshotting all VMs";
-    snapshot_all "cluster" n >>= fun _ ->
-    echo "Starting up cluster";
-    start_all "cluster" n;
-    Lwt.return ()
-  in
+let snapshot_name = "testarossa_clean"
 
-  let reset_vms () =
+let update_box () =
+  echo "Updating vagrant box to latest version";
+  update_box "infrastructure";
+  update_box "cluster1"
+
+type reset_mode = Force | Snapshot
+let reset_vms reset_mode =
+    begin if reset_mode = Snapshot then
+      let new_name = Printf.sprintf "before reset %f" (Unix.gettimeofday ()) in
+      echo "Snapshotting VMs before reset";
+      snapshot_all "cluster" n ~new_name
+    else
+      Lwt.return []
+    end >>= fun _ ->
     echo "Reseting all cluster & infrastructure VMs to snapshot";
-    revert_all "cluster" n >>= fun () ->
+    revert_all "cluster" n ~snapshot_name >>= fun () ->
     start_all "cluster" n;
-    Lwt.return ()
-  in
+    Lwt.return_unit
 
-  let th =
-    begin if not skip then
-      if reset then
-        reset_vms ()
-      else
-        prepare ()
-      else Lwt.return ()
-    end >>= fun () ->
-    Lwt.return ()
+let prepare () =
+  echo "Starting up cluster";
+  (* TODO: infrastructure needs to be started before cluster,
+     or remove provisioninig dependency *)
+  start_all "cluster" n;
+  echo "Snapshotting all VMs";
+  snapshot_all "cluster" n ~new_name:snapshot_name >>= fun _ ->
+  echo "Starting up cluster";
+  start_all "cluster" n;
+  Lwt.return_unit
+
+
 (*    echo "Running quicktest...";
     match !?* (?|>) "%s" quicktest_cmd with
     | (_, 0) ->
@@ -50,23 +54,77 @@ let main skip reset =
       echo "%s" (trim stdout);
       echo "---[  END OUTPUT FROM QUICKTEST  ]---";
       echo "Quicktest failed (exit code %d)" rc;
-      exit rc;*)
-  in
-  (* TODO: kill child processes too! *)
-  (* TODO: even on failure run selfdestruct *)
-  run_and_self_destruct th;
+      exit rc;
+*)
+
+type mode = Skip | Reset of reset_mode | Recreate | Destroy | Provision
+
+let main update mode =
+  kill_children_at_exit ();
+  if update then
+    update_box ();
+  run_and_self_destruct @@ match mode with
+  | Some (Reset reset_mode) ->
+    reset_vms reset_mode
+  | Some Recreate ->
+    echo "Destroying cluster";
+    destroy_all "cluster" n;
+    prepare ()
+  | Some Destroy ->
+    echo "Destroying cluster";
+    destroy_all "cluster" n;
+    Lwt.return_unit
+  | Some Provision ->
+    provision_all "cluster" n;
+    Lwt.return_unit
+  | None ->
+    prepare ()
+  | Some Skip ->  Lwt.return_unit
 
 open Cmdliner
 
-let skip_arg =
-  let doc = "Assume VMs are already up, skip provisioning and starting" in
-  Arg.(value & flag & info ["skip"] ~doc)
+let mode_arg =
+  let modes = [
+    ("skip-prepare", Skip),
+    "assumes the test environment is already prepared (VMs running),\
+     and skips straight to executing the tests.";
 
-let reset_arg =
-  let doc = "Reset all test VMs to snapshot" in
-  Arg.(value & flag & info ["reset"] ~doc)
+    ("reset", Reset Snapshot),
+    "takes a snapshot of the cluster (to avoid loosing logs needed for debugging),
+     and resets all the cluster VMs to the first clean snapshot.";
 
-let main_t = Term.(pure main $ skip_arg $ reset_arg)
+    ("force-reset", Reset Force),
+    "resets all the cluster VMs to the first clean snapshot, \
+     DELETING all the changes made inside the VMs.";
+
+    ("recreate", Recreate),
+    "destroy all vagrant cluster VMs (note: doesn't delete snapshots yet),\
+    recreate and reprovision them";
+
+    ("provision", Provision),
+    "rerun (ansible) provisioning on cluster nodes.";
+
+    ("destroy", Destroy),
+    "destroy all the cluster&infrastructure VMs."
+  ] in
+  let docv = "MODE" in
+  let doc =
+    Printf.sprintf "$(docv) must be %s. %s"
+      (Arg.doc_alts_enum (List.map fst modes))
+      (modes |> List.map (fun ((mode, _), mode_doc) ->
+           Printf.sprintf "%s mode %s" (Arg.doc_quote mode) mode_doc) |>
+      String.concat ". ")
+  in
+  Arg.(value & opt (modes |> List.map fst |> enum |> some) None & info ["mode"] ~docv ~doc)
+  
+let update_arg =
+  let doc = "Update Vagrant boxes (pull new XVA builds).
+             By default we do not update the templates to make dev/debug easier.
+             Automated builds should always enable --update though."
+  in
+  Arg.(value & flag & info ~doc ["update"])
+
+let main_t = Term.(pure main $ update_arg $ mode_arg)
 
 let info =
   let doc = "Run pcs cluster test" in

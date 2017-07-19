@@ -68,7 +68,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   end
 
 # Defines cluster{1,2,3} for corosync investigation
-  N = 3
+  N = 16
   NAMES = Hash[ (1..N).map{|i| [i, "cluster#{i}"]} ]
   (1..N).each do |i|
     hostname = NAMES[i]
@@ -96,7 +96,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   config.vm.provider "xenserver" do |xs|
     xs.use_himn = true
     xs.memory = 1024
-    xs.xs_host = "gandalf.uk.xensource.com"
+    xs.xs_host = "perfuk-01-10.xenrt.citrite.net"
     xs.xs_username = "root"
     xs.xs_password = "xenroot"
   end

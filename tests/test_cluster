@@ -9,7 +9,7 @@ open Xen_api
 open Xen_api_lwt_unix
 open Test_common
 
-let n = 16 (* TODO: match vagrantfile *)
+let n = 64 (* TODO: match vagrantfile *)
 
 let snapshot_name = "testarossa_clean"
 

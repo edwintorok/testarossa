@@ -43,6 +43,7 @@ type sr_type = NFS | ISCSI
 let update_box name =
   ?| (Printf.sprintf "vagrant box update %s" name)
 
+(* TODO: if too many run them in groups, like XC *)
 let start_all prefix m =
   let hosts = Array.init m (fun i -> i+1) |> Array.to_list |> List.map (Printf.sprintf "%s%d" prefix) in
   let hosts = String.concat " " hosts in
@@ -62,7 +63,7 @@ let destroy_all prefix m =
     
 let provision_all prefix m =
   let hosts = Array.init m (fun i -> i+1) |> Array.to_list |> List.map (Printf.sprintf "%s%d" prefix) in
-  ?| (Printf.sprintf "vagrant provision %s --parallel --provider=xenserver" (String.concat " " hosts))
+  ?| (Printf.sprintf "vagrant provision %s" (String.concat " " hosts))
 
 let setup_infra () =
   let wwn = ?|> "vagrant ssh infrastructure -c \"/scripts/get_wwn.py\"" |> trim in

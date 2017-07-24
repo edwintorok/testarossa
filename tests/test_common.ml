@@ -99,6 +99,12 @@ type snapshot_config = {
 let name_of_config conf name m =
   Printf.sprintf "testarossa/%s/%d/%d/%s/%s" conf.machine m conf.cluster_max conf.prefix name
 
+let vagrant_shutdown name =
+  ?| (Printf.sprintf "vagrant ssh %s -c \"sudo shutdown -P now\"" name)
+
+let vagrant_sync name =
+  ?| (Printf.sprintf "vagrant ssh %s -c \"sync\"" name)
+
 let snapshot_all conf ?(consistent=false) m ~new_name =
   let new_name = name_of_config conf new_name m in
   let rpc = make (uri conf.machine) in
@@ -107,14 +113,11 @@ let snapshot_all conf ?(consistent=false) m ~new_name =
   let snapshot_host name =
     get_ref name >>= fun vm ->
     begin if consistent then
-      VM.shutdown ~rpc ~session_id ~vm
+      Lwt_preemptive.detach vagrant_sync name
     else Lwt.return_unit
     end >>= fun () ->
     VM.snapshot ~rpc ~session_id ~vm ~new_name >>= fun id ->
-    if consistent then
-      VM.start ~rpc ~session_id ~vm ~start_paused:false ~force:false >>= fun () ->
-      Lwt.return id
-    else Lwt.return id
+    Lwt.return id
   in
   "infrastructure" ::
   (Array.init m (fun i -> Printf.sprintf "%s%d" conf.prefix (i+1)) |> Array.to_list) |>

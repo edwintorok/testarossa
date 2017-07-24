@@ -1,6 +1,7 @@
 #!/usr/bin/env ocamlscript
-Ocaml.packs := ["lwt"; "xen-api-client.lwt"; "cmdliner"; "re"; "ezxmlm"];
-Ocaml.sources := ["../scripts/yorick.ml"; "test_common.ml"]
+Ocaml.packs := ["lwt.preemptive"; "threads"; "xen-api-client.lwt"; "cmdliner"; "re"; "ezxmlm"];
+Ocaml.sources := ["../scripts/yorick.ml"; "test_common.ml"];
+Ocaml.ocamlflags := ["-thread"]
 --
 
 open Yorick

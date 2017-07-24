@@ -90,8 +90,18 @@ let get_ref name = lwt_read (Printf.sprintf ".vagrant/machines/%s/xenserver/id" 
 let get_vm_ref prefix i =
   get_ref (Printf.sprintf "%s%d" prefix i)
 
-let snapshot_all prefix ?(consistent=false) m ~new_name =
-  let rpc = make (uri "perfuk-01-10.xenrt.citrite.net") in
+type snapshot_config = {
+  machine: string;
+  cluster_max: int;
+  prefix: string;
+}
+
+let name_of_config conf name m =
+  Printf.sprintf "testarossa/%s/%d/%d/%s/%s" conf.machine m conf.cluster_max conf.prefix name
+
+let snapshot_all conf ?(consistent=false) m ~new_name =
+  let new_name = name_of_config conf new_name m in
+  let rpc = make (uri conf.machine) in
   Session.login_with_password rpc !username !password "1.0" "testarossa" >>=
   fun session_id ->
   let snapshot_host name =
@@ -107,17 +117,18 @@ let snapshot_all prefix ?(consistent=false) m ~new_name =
     else Lwt.return id
   in
   "infrastructure" ::
-  (Array.init m (fun i -> Printf.sprintf "%s%d" prefix (i+1)) |> Array.to_list) |>
+  (Array.init m (fun i -> Printf.sprintf "%s%d" conf.prefix (i+1)) |> Array.to_list) |>
   Lwt_list.map_p snapshot_host
 
-let revert_all prefix m ~snapshot_name =
-  let rpc = make (uri "perfuk-01-10.xenrt.citrite.net") in
+let revert_all conf m ~snapshot_name =
+  let rpc = make (uri conf.machine) in
+  let expected_name = name_of_config conf snapshot_name m in
   Session.login_with_password rpc !username !password "1.0" "testarossa" >>=
   fun session_id ->
 
   let is_ours snapshot =
     VM.get_name_label ~rpc ~session_id ~self:snapshot >|= fun name ->
-    name = snapshot_name
+    name = expected_name
   in
 
   let revert_host name =
@@ -130,7 +141,7 @@ let revert_all prefix m ~snapshot_name =
     VM.revert ~rpc ~session_id ~snapshot
   in
   "infrastructure" ::
-  (Array.init m (fun i -> Printf.sprintf "%s%d" prefix (i+1)) |> Array.to_list) |>
+  (Array.init m (fun i -> Printf.sprintf "%s%d" conf.prefix (i+1)) |> Array.to_list) |>
   Lwt_list.iter_p revert_host
 
 

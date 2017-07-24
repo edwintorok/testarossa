@@ -9,9 +9,7 @@ open Xen_api
 open Xen_api_lwt_unix
 open Test_common
 
-let n = 64 (* TODO: match vagrantfile *)
-
-let snapshot_name = "testarossa_clean"
+let snapshot_name = "clean"
 
 let update_box () =
   echo "Updating vagrant box to latest version";
@@ -19,16 +17,16 @@ let update_box () =
   update_box "cluster1"
 
 type reset_mode = Force | Snapshot
-let reset_vms reset_mode =
+let reset_vms conf reset_mode =
   (* TODO: determine current state, check whether we should start/stop/etc.
      whether snapshot already exists, etc *)
     begin if reset_mode = Snapshot then
       let new_name = Printf.sprintf "before reset %f" (Unix.gettimeofday ()) in
       (* start wouldn't be needed, but vagrant needs to know about the VM, it must be created at least *)
       echo "Starting all VMs";
-      start_all "cluster" n;
+      start_all "cluster" conf.cluster_max;
       echo "Snapshotting VMs before reset";
-      snapshot_all "cluster" n ~new_name
+      snapshot_all conf ~new_name conf.cluster_max
     else
       Lwt.return []
   end >>= fun _ ->
@@ -37,20 +35,20 @@ let reset_vms reset_mode =
        so we are sure we restore the right snapshot
 
     *)
-    revert_all "cluster" n ~snapshot_name >>= fun () ->
-    start_all "cluster" n;
+    revert_all conf conf.cluster_max ~snapshot_name >>= fun () ->
+    start_all "cluster" conf.cluster_max;
     Lwt.return_unit
 
-let prepare () =
+let prepare conf =
   echo "Starting up cluster";
   (* TODO: infrastructure needs to be started before cluster,
      or remove provisioninig dependency *)
-  initialize_all "cluster" n;
+  initialize_all "cluster" conf.cluster_max;
   echo "Snapshotting all VMs";
-  snapshot_all "cluster" n ~consistent:true ~new_name:snapshot_name >>= fun _ ->
+  snapshot_all conf conf.cluster_max ~consistent:true ~new_name:snapshot_name >>= fun _ ->
   Lwt.return_unit
 
-let sequential_join_remove () =
+let sequential_join_remove n =
   echo "Setting up cluster on 1st node";
   run_script ~host:"cluster1" ~script:"setup_cluster_one.sh";
 
@@ -82,8 +80,8 @@ let sequential_join_remove () =
     run_script ~host:last ~script:("remove_node.sh " ^ node);
   done*)
 
-let run_test () =
-  sequential_join_remove ();
+let run_test n =
+  sequential_join_remove n;
   Lwt.return_unit
 (*    echo "Running quicktest...";
     match !?* (?|>) "%s" quicktest_cmd with
@@ -100,29 +98,29 @@ let run_test () =
 
 type mode = Skip | Reset of reset_mode | Recreate | Destroy | Provision
 
-let main update mode =
+let main update mode conf =
   kill_children_at_exit ();
   if update then
     update_box ();
   run_and_self_destruct (begin match mode with
   | Some (Reset reset_mode) ->
-    reset_vms reset_mode
+    reset_vms conf reset_mode
   | Some Recreate ->
     echo "Destroying cluster";
-    destroy_all "cluster" n;
-    prepare ()
+    destroy_all "cluster" conf.cluster_max;
+    prepare conf
   | Some Destroy ->
     echo "Destroying cluster";
-    destroy_all "cluster" n;
+    destroy_all "cluster" conf.cluster_max;
     Lwt.return_unit
   | Some Provision ->
-    provision_all "cluster" n;
+    provision_all "cluster" conf.cluster_max;
     Lwt.return_unit
   | None ->
-    prepare ()
+    prepare conf
   | Some Skip ->  Lwt.return_unit
   end >>= fun () ->
-  run_test ())
+  run_test conf.cluster_max)
 
 open Cmdliner
 
@@ -167,7 +165,23 @@ let update_arg =
   in
   Arg.(value & flag & info ~doc ["update"])
 
-let main_t = Term.(pure main $ update_arg $ mode_arg)
+let default_host = "perfuk-01-10.xenrt.citrite.net"
+
+let conf_arg =
+  let machine_arg =
+    let doc = "Xenserver host to use" in
+    Arg.(value & opt string default_host & info ["host"] ~doc)
+  in
+  let cluster_max_arg =
+    let doc = "Nodes in the cluster" in
+    let docv = "NODES" in
+    Arg.(value & opt int 5 & info ["n"] ~doc ~docv)
+  in
+  let open Test_common in 
+  let build_conf machine cluster_max = { machine; cluster_max; prefix = "cluster" } in
+  Term.(pure build_conf $ machine_arg $ cluster_max_arg)
+
+let main_t = Term.(pure main $ update_arg $ mode_arg $ conf_arg)
 
 let info =
   let doc = "Run pcs cluster test" in

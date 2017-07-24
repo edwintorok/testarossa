@@ -112,7 +112,7 @@ let main update mode conf =
   | Some Destroy ->
     echo "Destroying cluster";
     destroy_all "cluster" conf.cluster_max;
-    Lwt.return_unit
+    exit 0
   | Some Provision ->
     provision_all "cluster" conf.cluster_max;
     Lwt.return_unit

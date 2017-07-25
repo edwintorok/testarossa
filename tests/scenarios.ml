@@ -14,11 +14,13 @@ module NodeId = struct
 end
 
 module NodeMap = Map.Make(NodeId)
+module NodeSet = Set.Make(NodeId)
 
 type node = {
   id: NodeId.t;
   state: states option; (* corosync state *)
   node_set : int NodeMap.t; (* node -> votes *)
+  removed: NodeSet.t;
 }
 
 let int_compare (a:int) (b:int) = Pervasives.compare a b
@@ -28,15 +30,18 @@ let node_compare a b =
   if d = 0 then
     let d = Pervasives.compare a.state b.state in
     if d = 0 then
-      NodeMap.compare int_compare a.node_set b.node_set
+      let d = NodeMap.compare int_compare a.node_set b.node_set in
+      if d = 0 then NodeSet.compare a.removed b.removed
+          else d
     else d
   else d
 
 let node_pp ppf node =
-  Format.fprintf ppf "[id: %d; state: _; node_set: %a]"
+  Format.fprintf ppf "[id: %d; state: _; node_set: %a; removed: %d]"
     node.id
     Fmt.(list ~sep:(always ",") (pair ~sep:(always "->") NodeId.pp int))
     (NodeMap.bindings node.node_set)
+    (NodeSet.cardinal node.removed)
 
 
 (* clean shutdown: only one at a time, confirmed by quorum *)
@@ -109,6 +114,7 @@ module State = struct
             id;
             state = if id == NodeId.lowest then Some Active else None;
             node_set = NodeMap.singleton id 1;
+            removed = NodeSet.empty;
           } acc
         ) NodeMap.empty node_ids
     in
@@ -148,10 +154,31 @@ let check_for_split_brain (links, nodes) =
       true
     end
 
-let join ~clusternode b nodes =
+let update_votes links ~clusternode node_set nodes =
+  let _, node = NodeMap.min_binding nodes in
+  let removed = NodeSet.cardinal node.removed in
+  let n = NodeMap.cardinal nodes - removed in
+  NodeMap.mapi (fun id node ->
+      if NodeMap.mem id node_set && can_reach links clusternode.id id then
+      {node with node_set =
+                   NodeMap.mapi (fun id votes ->
+                       if id == NodeId.lowest &&
+                          n mod 2 == 0 then
+                         removed+2
+                       else if NodeSet.mem id node.removed then
+                         1
+                       else
+                         removed+1
+                     ) node.node_set}
+     else node
+    ) nodes
+(* the removed nodes must never become quorate *)
+
+let join ~links ~clusternode b nodes =
   let clusternode = NodeMap.find clusternode nodes in
   assert (clusternode.state == Some Active);
   let node_set = NodeMap.add b 1 clusternode.node_set in
+  let removed = NodeSet.remove b clusternode.removed in
 
   let activate_node id nodes =
     let node = NodeMap.find b nodes in
@@ -168,34 +195,54 @@ let join ~clusternode b nodes =
                      Fmt.(list ~sep:(always ",") (pair NodeId.pp int))
                      (NodeMap.bindings node.node_set)
                  );
-      let node' = { node with node_set } in 
+      let node' = { node with node_set; removed; } in 
       NodeMap.add id node' map
     ) nodes_to_update |>
-  activate_node b
+  activate_node b |>
+  update_votes ~clusternode links node_set
+
+let shutdown ~links ~clusternode b nodes =
+  let clusternode = NodeMap.find clusternode nodes in
+  assert (clusternode.state == Some Active);
+  let removed = NodeSet.add b clusternode.removed in
+  nodes |>
+  NodeMap.map (fun node -> {node with removed; }) |>
+  update_votes ~clusternode links clusternode.node_set
+
 
 let remove ~links ~clusternode b nodes =
   let clusternode = NodeMap.find clusternode nodes in
   assert (clusternode.state == Some Active);
   (* force remove: no quorum checks *)
   let deactivate_node id nodes =
-    (* force-remove: no deactivation *)
+    (* force-remove: no deactivation, but must do quorum check *)
+    (* clean remove: set votes to 1 *)
 (*    let node = NodeMap.find b nodes in
     assert (node.state <> None);
       NodeMap.add b { node with state = None } nodes*)
-    nodes
+    NodeMap.map (fun node ->
+        let node_set = NodeMap.mapi
+            (fun nid votes ->
+               if nid == id then 1
+               else votes
+            )  node.node_set in
+        { node with node_set }
+      ) nodes
   in
 
-  let nodes_to_update = clusternode.node_set in
+  let node_set = clusternode.node_set in
   nodes |>
   NodeMap.fold (fun id _votes map ->
       if can_reach links clusternode.id id then
         let node = NodeMap.find id map in
-        let node_set = NodeMap.remove b node.node_set in
-        let node' = { node with node_set } in 
+        let node' = { node with node_set;
+                                removed = NodeSet.add b node.removed
+                    } in
         NodeMap.add id node' map
       else map
-    ) nodes_to_update |>
-  deactivate_node b
+    ) node_set |>
+  deactivate_node b |>
+  update_votes ~clusternode links clusternode.node_set
 
 
 module StateSet = Set.Make(State)
@@ -228,9 +275,9 @@ let rec explore seen state =
       for j = i+1 to n do
         let node' = NodeMap.find j nodes in
         if node'.state == None then
-          go (links, join ~clusternode:i j nodes)
+          go (links, join ~links ~clusternode:i j nodes)
         else
-          go (links, remove ~links ~clusternode:i j nodes)
+          go (links, shutdown ~links ~clusternode:i j nodes)
       done
   done;
 
@@ -261,8 +308,8 @@ let () =
 let do_split_brain () =
   let links, nodes = State.initial in
   let nodes = nodes |>
-              join ~clusternode:1 2 |>
-              join ~clusternode:1 3
+              join ~clusternode:1 ~links 2 |>
+              join ~clusternode:1 ~links 3
   in
   let links = links |>
               cut 1 2 |>
@@ -277,8 +324,8 @@ let do_split_brain () =
               remove ~links ~clusternode:1 3
   in
   let nodes = nodes |>
-              join ~clusternode:1 4 |>
-              join ~clusternode:1 5
+              join ~clusternode:1 ~links 4 |>
+              join ~clusternode:1 ~links 5
   in
   let links = links |>
               cut 1 4 |>
@@ -288,7 +335,28 @@ let do_split_brain () =
   Format.printf "state: %a\n%!" State.pp  state;
   assert (check_for_split_brain state)
 
+let do_split_brain2 () =
+  let links, nodes = State.initial in
+  let nodes = nodes |>
+              join ~clusternode:1 ~links 2 |>
+              join ~clusternode:1 ~links 3
+  in
+  let nodes = nodes |>
+              remove ~links ~clusternode:1 2 |>
+              remove ~links ~clusternode:1 3
+  in
+  let links = links |>
+              cut 1 2 |>
+              cut 1 3
+  in
+  let state = (links, nodes) in
+  Format.printf "state: %a\n%!" State.pp  state;
+  assert (check_for_split_brain state);
+  exit 0
+
 let () =
   Logs.set_reporter (Logs_fmt.reporter ());
   Logs.set_level (Some Logs.Info);
-  explore (ref StateSet.empty) State.initial
+  let states = ref StateSet.empty in
+  explore states State.initial;
+  Logs.info (fun m -> m "explored %d states" (StateSet.cardinal !states))

@@ -13,34 +13,38 @@ module NodeId = struct
   let compare (a:t) (b:t) = Pervasives.compare a b
 end
 
-module NodeSet = Set.Make(NodeId)
+module NodeMap = Map.Make(NodeId)
 
 type node = {
   id: NodeId.t;
   state: states option; (* corosync state *)
-  node_set : NodeSet.t;
+  node_set : int NodeMap.t; (* node -> votes *)
 }
+
+let int_compare (a:int) (b:int) = Pervasives.compare a b
+
 let node_compare a b =
   let d = NodeId.compare a.id b.id in
   if d = 0 then
     let d = Pervasives.compare a.state b.state in
     if d = 0 then
-      NodeSet.compare a.node_set b.node_set
+      NodeMap.compare int_compare a.node_set b.node_set
     else d
   else d
 
 let node_pp ppf node =
   Format.fprintf ppf "[id: %d; state: _; node_set: %a]"
     node.id
-    Fmt.(list ~sep:(always ",") NodeId.pp)
-    (NodeSet.elements node.node_set)
+    Fmt.(list ~sep:(always ",") (pair ~sep:(always "->") NodeId.pp int))
+    (NodeMap.bindings node.node_set)
 
 
 (* clean shutdown: only one at a time, confirmed by quorum *)
 
-module NodeMap = Map.Make(NodeId)
-
-module LinkSet = Set.Make(struct type t = NodeId.t * NodeId.t let compare = compare end)
+module LinkSet = Set.Make(struct
+    type t = NodeId.t * NodeId.t
+    let compare = compare
+end)
 
 
 let can_reach links a b =
@@ -51,18 +55,29 @@ let can_symmetric_reach links a b =
   can_reach links a b &&
   can_reach links b a
 
+let sum_votes nodes =
+  NodeMap.fold (fun _ -> (+)) nodes 0
+
+let is_quorum i n =
+  i >= n/2 + 1
+
+let is_tie i n =
+  (* beware integer division if using n/2 *)
+  i*2 == n
+
 let is_quorate links node =
   if node.state <> Some Active then false
   else
-  let n = NodeSet.cardinal node.node_set in
+  let all_votes = sum_votes node.node_set in
   let seen =
     node.node_set |>
-    NodeSet.filter (can_symmetric_reach links node.id) |>
-    NodeSet.cardinal in
-  (* beware integer division if using n/2 *)
+    NodeMap.filter (fun n _ -> can_symmetric_reach links node.id n) |>
+    sum_votes
+  in
   let result =
-  seen*2 > n ||
-  (seen*2 == n && can_symmetric_reach links NodeId.lowest node.id) in
+    is_quorum seen all_votes ||
+    (is_tie seen all_votes
+     && can_symmetric_reach links NodeId.lowest node.id) in
   Logs.debug (fun m -> m "Node %d sees %d/%d nodes, quorate: %b"
                  node.id seen n result);
   result
@@ -88,15 +103,12 @@ module State = struct
     in
     let nodes : node NodeMap.t =
       let node_ids = Array.init n (fun i -> i+1) in
-      let node_set = Array.fold_left (fun acc id ->
-          NodeSet.add id acc
-        ) NodeSet.empty node_ids in
       Array.fold_left (fun acc id ->
           NodeMap.add id 
           {
             id;
             state = if id == NodeId.lowest then Some Active else None;
-            node_set = NodeSet.singleton id;
+            node_set = NodeMap.singleton id 1;
           } acc
         ) NodeMap.empty node_ids
     in
@@ -139,7 +151,7 @@ let check_for_split_brain (links, nodes) =
 let join ~clusternode b nodes =
   let clusternode = NodeMap.find clusternode nodes in
   assert (clusternode.state == Some Active);
-  let node_set = NodeSet.add b clusternode.node_set in
+  let node_set = NodeMap.add b 1 clusternode.node_set in
 
   let activate_node id nodes =
     let node = NodeMap.find b nodes in
@@ -149,12 +161,12 @@ let join ~clusternode b nodes =
 
   let nodes_to_update = clusternode.node_set in
   nodes |>
-  NodeSet.fold (fun id map ->
+  NodeMap.fold (fun id votes map ->
       let node = NodeMap.find id map in
       Logs.debug (fun m -> m "added %d, new set: %a"
                      id
-                     Fmt.(list ~sep:(always ",") NodeId.pp)
-                     (NodeSet.elements node.node_set)
+                     Fmt.(list ~sep:(always ",") (pair NodeId.pp int))
+                     (NodeMap.bindings node.node_set)
                  );
       let node' = { node with node_set } in 
       NodeMap.add id node' map
@@ -164,6 +176,7 @@ let join ~clusternode b nodes =
 let remove ~links ~clusternode b nodes =
   let clusternode = NodeMap.find clusternode nodes in
   assert (clusternode.state == Some Active);
+  (* force remove: no quorum checks *)
   let deactivate_node id nodes =
     (* force-remove: no deactivation *)
 (*    let node = NodeMap.find b nodes in
@@ -174,10 +187,10 @@ let remove ~links ~clusternode b nodes =
 
   let nodes_to_update = clusternode.node_set in
   nodes |>
-  NodeSet.fold (fun id map ->
+  NodeMap.fold (fun id _votes map ->
       if can_reach links clusternode.id id then
         let node = NodeMap.find id map in
-        let node_set = NodeSet.remove b node.node_set in
+        let node_set = NodeMap.remove b node.node_set in
         let node' = { node with node_set } in 
         NodeMap.add id node' map
       else map

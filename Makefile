@@ -1,4 +1,4 @@
-HOSTS=cluster1 cluster2 cluster3 cluster4 cluster5
+HOSTS=cluster1 cluster2 cluster3
 ssh-config: $(foreach host,$(HOSTS),.vagrant/machines/$(host)/xenserver/id)
 	vagrant ssh-config $(HOSTS) > $@
 

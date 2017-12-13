@@ -82,7 +82,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 #  end
 
 # Defines cluster{1,2,3} for corosync investigation
-  N = 3
+  N = 24
   NAMES = Hash[ (1..N).map{|i| [i, "cluster#{i}"]} ]
   (1..N).each do |i|
     hostname = NAMES[i]
@@ -106,7 +106,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     end
   end
 
-  XN = 3
+  XN = 24
   XNAMES = Hash[ (0..XN).map{|i| [i, "xcluster#{i}"]} ]
   (0..XN).each do |i|
     hostname = XNAMES[i]

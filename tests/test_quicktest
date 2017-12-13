@@ -10,7 +10,7 @@ open Xen_api_lwt_unix
 open Test_common
 
 let prefix = "xcluster"
-let n = 2
+let n = 24
 
 let quicktest_cmd = "vagrant ssh " ^ prefix ^ "1 -c 'sudo /opt/xensource/debug/quicktest -only-sr gfs2'"
 
@@ -18,10 +18,10 @@ let _ =
   let th =
     (*    echo "Updating vagrant box to latest version";
     update_box (prefix ^ "1");*)
-  (*  echo "Starting up host";
+(*    echo "Starting up host";
     start_all prefix n;*)
-(*    echo "Setting up infrastructure VM for iSCSI export";
-    let _ = setup_infra () in*)
+    echo "Setting up infrastructure VM for iSCSI export";
+    let _ = setup_infra () in
     echo "Building pool";
     let hosts = get_hosts prefix n in
     get_pool hosts

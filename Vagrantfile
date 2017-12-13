@@ -12,7 +12,6 @@ folders = {'xs/rpms' => '/rpms',
            'xs/sbin' => '/sbin',
            'xs/bin' => '/bin',
            'xs/boot' => '/boot',
-           'xs/etc/firstboot.d/' => '/etc/firstboot.d/',
 #	   'xs/usr/sbin' => '/usr/sbin',
 #           'scripts' => '/scripts'
            }
@@ -108,7 +107,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
   XN = 24
   XNAMES = Hash[ (0..XN).map{|i| [i, "xcluster#{i}"]} ]
-  (0..XN).each do |i|
+  (1..XN).each do |i|
     hostname = XNAMES[i]
     config.vm.define hostname do |host|
       host.vm.box = "jonludlam/#{LOCAL_BRANCH}"

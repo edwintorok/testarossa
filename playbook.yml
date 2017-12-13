@@ -13,7 +13,9 @@
   become_method: sudo
   become_user: root
   roles:
+  - { role: xenserver, device="eth1" }
   - common
+  - cluster
 
 - hosts: honolulu
   become: true

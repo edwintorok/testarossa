@@ -7,13 +7,14 @@ VAGRANTFILE_API_VERSION = "2"
 LOCAL_BRANCH = ENV.fetch("LOCAL_BRANCH", "feature-REQ477-master")
 
 USER = ENV.fetch("USER")
-folders = {'xs/rpms' => '/rpms',
-           'xs/opt' => '/opt',
+folders = {
+#    'xs/rpms' => '/rpms',
+#           'xs/opt' => '/opt',
            'xs/sbin' => '/sbin',
-           'xs/bin' => '/bin',
-           'xs/boot' => '/boot',
+#           'xs/bin' => '/bin',
+#           'xs/boot' => '/boot',
 #	   'xs/usr/sbin' => '/usr/sbin',
-#           'scripts' => '/scripts'
+           'scripts' => '/scripts'
            }
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
@@ -81,7 +82,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 #  end
 
 # Defines cluster{1,2,3} for corosync investigation
-  N = 24
+  N = 64
   NAMES = Hash[ (1..N).map{|i| [i, "cluster#{i}"]} ]
   (1..N).each do |i|
     hostname = NAMES[i]
@@ -105,7 +106,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     end
   end
 
-  XN = 24
+  XN = 16
   XNAMES = Hash[ (0..XN).map{|i| [i, "xcluster#{i}"]} ]
   (1..XN).each do |i|
     hostname = XNAMES[i]

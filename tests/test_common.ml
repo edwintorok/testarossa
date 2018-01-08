@@ -200,9 +200,10 @@ let setup_pool hosts =
       Lwt.return (rpc,sess)) hosts
   >>= fun rss ->
   let slaves = List.tl rss in
-  Lwt_list.iter_p (fun (rpc,session_id) ->
+  Lwt_list.iter_s (fun (rpc,session_id) ->
       Pool.join ~rpc ~session_id ~master_address:(List.hd hosts).ip
-        ~master_username:"root" ~master_password:"xenroot") slaves >>= fun () ->
+        ~master_username:"root" ~master_password:"xenroot" >>= fun () ->
+      Lwt_unix.sleep 30.) slaves >>= fun () ->
   Printf.printf "All slaves told to join: waiting for all to be enabled\n%!";
   let rpc,session_id = List.hd rss in
   let rec wait () =
@@ -335,6 +336,7 @@ let create_gfs2_sr state =
          Lwt.return "<bad>")
   >>= fun xml ->
   let open Ezxmlm in
+  echo "got: %s" xml;
   let (_,xmlm) = from_string xml in
   let scsiid = xmlm |> member "iscsi-target" |> member "LUN" |> member "SCSIid"
          |> data_to_string in

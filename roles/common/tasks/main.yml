@@ -4,6 +4,11 @@
     hostname "{{inventory_hostname}}"
     echo "{{inventory_hostname}}" > /etc/hostname
   when: ansible_hostname != inventory_hostname
+- name: speed up boot - disable boot timeout
+  lineinfile:
+    path: /boot/grub/grub.cfg
+    regexp: '^set timeout='
+    line: 'set timeout=0'
 - name: improve log timestamps
   lineinfile:
     path: /etc/rsyslog.conf

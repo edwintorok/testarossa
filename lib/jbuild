@@ -1,0 +1,5 @@
+(jbuild_version 1)
+(library
+ ((name testarossa)
+  (public_name testarossa)
+  (libraries (astring logs fmt xen-api-client-lwt))))

@@ -9,6 +9,15 @@
     path: /boot/grub/grub.cfg
     regexp: '^set timeout='
     line: 'set timeout=0'
+- name: remove non-local NTP servers
+  lineinfile:
+    path: /etc/ntp.conf
+    regexp: '^server.*ntp.org'
+    state: absent
+- name: remove step-tickers to force ntp.conf fallback
+  file:
+      path: /etc/ntp/step-tickers
+      state: absent
 - name: improve log timestamps
   lineinfile:
     path: /etc/rsyslog.conf

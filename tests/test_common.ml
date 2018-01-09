@@ -486,7 +486,6 @@ let find_or_create_mirage_vm state =
   | [] ->
     create_mirage_vm state
 
-
 let get_control_domain state host =
   let rpc = state.master_rpc in
   let session_id = state.master_session in
@@ -498,7 +497,6 @@ let get_control_domain state host =
     (fun (vm_ref, vm_rec) ->
        vm_rec.API.vM_resident_on=host && vm_rec.API.vM_is_control_domain)
     vms |> fst |> Lwt.return
-
 
 let run_and_self_destruct (t : 'a Lwt.t) : 'a =
   let t' =

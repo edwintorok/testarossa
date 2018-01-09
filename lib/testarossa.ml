@@ -14,6 +14,15 @@ module PP = struct
     Fmt.pf ppf "%a(%a)" vm_uuid vmr vm_name_label vmr
 end           
 
+let find_vm ~rpc ~session_id ~name =
+  VM.get_by_name_label ~rpc ~session_id ~label:name >>=
+    Lwt_list.filter_map_p (fun vm_ref ->
+        VM.get_record ~rpc ~session_id ~self:vm_ref >>= fun vmr ->
+        if not vmr.API.vM_is_a_template then Lwt.return_some (vm_ref, vmr)
+        else Lwt.return_none) >>= fun vms ->
+  Logs.debug (fun m -> m "found VMs with name \"%s\":@,%a" name Fmt.(list (using snd PP.vm_record)) vms);
+  Lwt.return vms
+
 let find_templates ~rpc ~session_id ~name =
   (* get_all_records_where doesn't seem to be able to filter on name_label/name-label *)
   VM.get_by_name_label ~rpc ~session_id ~label:name >>=
@@ -72,3 +81,18 @@ let with_default_session f =
           Lwt.fail_with (Printf.sprintf "Must specify exactly 2 lines in %s (got %d)" pwf (List.length l))
      end
   | _ -> Lwt.fail_with (Printf.sprintf "Must specify a single host in %s" machine)
+
+open Bos                       
+let ssh user host cmd =
+  let cmd = Cmd.(v "ssh" % (Printf.sprintf "%s@%s" user host) % "bash" % "-l" % "-c" % Filename.quote (Cmd.to_string cmd) |> to_list |> Array.of_list) in
+  Lwt_process.with_process_full (cmd.(0), cmd) ~timeout:30. (fun proc ->
+      Lwt_io.close proc#stdin >>= fun () ->
+      let log_stderr =
+        Lwt_io.read_lines proc#stderr
+        |> Lwt_stream.iter (fun line ->
+               Logs.debug (fun m -> m "SSH: %s" line)) in
+      Lwt_io.read_lines proc#stdout |> Lwt_stream.to_list >>= fun stdout ->
+      log_stderr >>= fun () ->
+      Logs.debug (fun m -> m "SSH stdout: %a" Fmt.(list string) stdout);
+      Lwt.return stdout
+    )

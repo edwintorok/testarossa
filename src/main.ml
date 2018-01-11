@@ -2,15 +2,29 @@ open Bos_setup
 open Testarossa
 open Lwt.Infix
 
-let main =          
-  with_default_session (fun ~rpc ~session_id ->
-      find_templates ~rpc ~session_id ~name:"XenServer" >>= fun lst ->
-      Lwt_list.iter_p (make_xenserver_template ~rpc ~session_id) lst >>= fun () ->
-      find_vm ~rpc ~session_id ~name:Sys.argv.(1) >>= fun vms ->
-      ssh "root" "perfuk-01-11.xenrt.citrite.net" Cmd.(v "arp" % "-na") >>= fun _ ->
-      Lwt.return_unit
-      )
+let ip = OS.Arg.conv ~docv:"IP" (fun s ->
+             R.trap_exn Ipaddr.V4.of_string_exn s |>
+             R.error_exn_trap_to_msg) Ipaddr.V4.pp_hum
+
+let main =
+  let ips = OS.Arg.(parse ~pos:ip ()) in
+  with_default_session (fun ~context ->
+      find_templates ~context ~name:"XenServer" >>= fun lst ->
+      Lwt_list.iter_p (make_xenserver_template ~context) lst >>= fun () ->
+      find_vm ~context ~name:Sys.argv.(1) >>= fun vms ->
+
+      Logs.debug (fun m -> m "IPs: %a" Fmt.(Dump.list Ipaddr.V4.pp_hum) ips);
+      make_pool ~context ips >>= fun master ->
+      with_pool ~context master (fun ~context ->
+          enable_clustering ~context >>= fun cluster ->
+          Lwt.return_unit
+        ))
 
 let () =
+  Printexc.record_backtrace true;
   Logs.set_level ~all:true (Some Logs.Debug);
+  Bos.OS.Cmd.(run_out Cmd.(v "tput" % "cols") |> to_string)
+  |> R.map int_of_string
+  |> Logs.on_error_msg ~use:(fun () -> 80)
+  |> Format.set_margin;
   Lwt_main.run main

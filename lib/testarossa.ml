@@ -205,6 +205,33 @@ let choose_master masters =
   | _, Some master -> Some master
   | [], _ -> None
 
+let fix_management_interfaces ~context ~master =
+  (* enabling HA will fail with "Not_found" if the host address IP doesn't match the IP used to join the servers,
+     i.e. the management interface must be set to the interface containing the master's IP *)
+  let ip = Ipaddr.V4.to_string master in
+  call_rpc ~context PIF.get_all_records >>= fun pifs ->
+  Logs.debug (fun m -> m "Looking for PIF with IP %s" ip);
+  match List.find_all (fun (_, pifr) ->
+      Logs.debug (fun m -> m "PIF %a -> %s" PP.pif pifr pifr.API.pIF_IP);
+      pifr.API.pIF_IP = ip) pifs with
+  | [(_, pifr)] ->
+    Logs.debug (fun m -> m "Found master PIF %a" PP.pif pifr);
+    let network = pifr.API.pIF_network in
+    pifs |>
+    List.filter (fun (_, pifr) -> pifr.API.pIF_network = network) |>
+    Lwt_list.iter_p (fun (pif, pifr) ->
+        if not pifr.API.pIF_management then begin
+          Logs.debug (fun m -> m "PIF %a is not management, reconfiguring" PP.pif pifr);
+          call_rpc ~context Host.management_reconfigure ~pif
+        end else begin
+          Logs.debug (fun m -> m "PIF %a is already management, nothing to do" PP.pif pifr);
+          Lwt.return_unit
+        end)
+  | _ :: _ ->
+    Lwt.fail_with ("Multiple PIFs with same IP: " ^ ip)
+  | [] ->
+    Lwt.fail_with ("Cannot find PIF for master IP: " ^ ip)
+
 let make_pool ~context ips =
   Lwt_list.map_p (get_master ~context) ips >>= fun masters ->
   match choose_master masters with
@@ -222,6 +249,7 @@ let make_pool ~context ips =
 
 let with_pool ~context master f =
   with_session ~uname:context.uname ~pwd:context.pwd ~machine:(Ipaddr.V4.to_string master) (fun ~context ->
+      fix_management_interfaces ~context ~master >>= fun () ->
       let rec wait_enabled () =
         Logs.debug (fun m -> m "Waiting for all hosts to be enabled in the pool");
         call_rpc ~context Host.get_all_records >>= fun hrecs ->
@@ -254,3 +282,95 @@ let enable_clustering ~context =
 
       Logs.debug (fun m -> m "Creating cluster on pool");
       call_rpc ~context Cluster.pool_create ~network ~cluster_stack:"corosync" ~token_timeout:20.0 ~token_timeout_coefficient:1.0
+
+let cluster_host_allowed_operations ~context cluster =
+  call_rpc ~context Cluster_host.get_all >>=
+  Lwt_list.iter_s (fun self ->
+      call_rpc ~context Cluster_host.get_allowed_operations ~self >>= fun operations ->
+      Logs.debug (fun m -> m "Got %d operations" (List.length operations));
+      Lwt_list.iter_s (function
+          | `enable ->
+            Logs.debug (fun m -> m "Enabling Cluster_host");
+            call_rpc ~context Cluster_host.enable ~self
+          | `disable ->
+            Logs.debug (fun m -> m "Disabling Cluster_host");
+            call_rpc ~context Cluster_host.disable ~self
+        ) operations)
+
+let get_master ~context =
+  call_rpc ~context Pool.get_all >>= fun pools ->
+  let pool = List.hd pools in
+  call_rpc ~context Pool.get_master ~self:pool
+
+let probe ~context ~iscsi ~iqn =
+  (* probe as if it was an iSCSI SR, since we don't have probe for GFS2 yet *)
+  Lwt.catch
+    (fun () ->
+       get_master ~context >>= fun host ->
+       Logs.debug (fun m -> m "Probing %a" Ipaddr.V4.pp_hum iscsi);
+       call_rpc ~context SR.probe ~host
+                ~device_config:["target", Ipaddr.V4.to_string iscsi; "targetIQN", iqn]
+                ~_type:"lvmoiscsi" ~sm_config:[])
+    (fun e -> match e with
+       | Api_errors.Server_error (_,[_;_;xml]) -> Lwt.return xml
+       | e ->
+         Logs.err (fun m -> m "Got another error: %s\n" (Printexc.to_string e));
+         Lwt.fail_with "<bad xml>")
+  >>= fun xml ->
+  let open Ezxmlm in
+  Logs.debug (fun m -> m "Got probe XML: %s" xml);
+  let (_,xmlm) = from_string xml in
+  let scsiid = xmlm |> member "iscsi-target" |> member "LUN" |> member "SCSIid"
+         |> data_to_string in
+  Logs.debug (fun m -> m "SR Probed: SCSIid=%s\n%!" scsiid);
+  Lwt.return scsiid
+
+let device_config ?(provider="iscsi") ~ip ~iqn ?scsiid () =
+  let open Ezjsonm in
+  let conf = [ "provider", `String provider;
+    "ips", `String (Ipaddr.V4.to_string ip);
+    "iqns", `String iqn;
+    "journal_size", `String "8"
+  ] in
+  (match scsiid with
+  | Some id -> ("ScsiId", `String id) :: conf
+  | None -> conf) |> dict |> to_string ~minify:true |> fun x -> ["uri", x]
+
+let create_gfs2_sr ~context ~iscsi ~iqn =
+  probe ~context ~iscsi ~iqn >>= fun scsiid ->
+  let device_config = device_config ~ip:iscsi ~iqn ~scsiid () in
+  get_master ~context >>= fun host ->
+  Logs.debug (fun m -> m "Creating SR, device_config: %a" Fmt.Dump.(list (pair Fmt.string Fmt.string)) device_config);
+  call_rpc ~context SR.create ~host ~device_config ~physical_size:0L ~name_label:"gfs2-sr"
+    ~name_description:"" ~_type:"gfs2" ~content_type:"" ~shared:true ~sm_config:[]
+
+let get_gfs2_sr ~context ~iscsi ~iqn =
+  (* TODO: check iqn etc *)
+  Logs.debug (fun m -> m "Looking for GFS2 SR");
+  call_rpc ~context SR.get_all_records_where ~expr:{|field "type" = "gfs2"|} >>= function
+  | (existing, _) :: _ ->
+    Logs.debug (fun m -> m "Found existing GFS2 SR");
+    Lwt.return existing
+  | [] -> create_gfs2_sr ~context ~iscsi ~iqn
+
+let license_hosts ~context ~license_server ~license_server_port =
+  Logs.debug (fun m -> m "Configuring license server");
+  call_rpc ~context Host.get_all >>= fun hosts ->
+  Lwt_list.iter_p (fun self ->
+      call_rpc ~context Host.remove_from_license_server ~self ~key:"port" >>= fun () ->
+      call_rpc ~context Host.add_to_license_server ~self ~key:"port" ~value:(string_of_int license_server_port) >>= fun () ->
+      call_rpc ~context Host.remove_from_license_server ~self ~key:"address" >>= fun () ->
+      call_rpc ~context Host.add_to_license_server ~self ~key:"address" ~value:license_server) hosts >>= fun () ->
+  call_rpc ~context Pool.get_all >>= fun pools ->
+  let pool = List.hd pools in
+  Logs.debug (fun m -> m "Applying license to pool");
+  call_rpc ~context Pool.apply_edition ~self:pool ~edition:"enterprise-per-socket" >>= fun () ->
+  Logs.debug (fun m -> m "License OK");
+  Lwt.return_unit
+
+let do_ha ~context ~sr =
+  Logs.debug (fun m -> m "Enabling HA");
+  call_rpc ~context Pool.enable_ha ~heartbeat_srs:[sr] ~configuration:[] >>= fun () ->
+  Logs.debug (fun m -> m "HA enabled");
+  Lwt.return_unit
+

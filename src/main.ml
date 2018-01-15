@@ -32,6 +32,9 @@ let main =
              | Some license_server ->
                 license_hosts ~context ~license_server ~license_server_port >>= fun () ->
                 do_ha ~context ~sr:gfs2 >>= fun () ->
+                undo_ha ~context >>= fun () ->
+                detach_sr ~context ~sr:gfs2 >>= fun () ->
+                cluster_host_allowed_operations ~context cluster >>= fun () ->
                 Lwt.return_unit
           | _ ->
              cluster_host_allowed_operations ~context cluster

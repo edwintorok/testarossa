@@ -269,7 +269,14 @@ let enable_clustering ~context =
   Logs.debug (fun m -> m "Checking for existing cluster on pool");
   call_rpc ~context Cluster.get_all >>= function
   | _ :: _ :: _ -> Lwt.fail_with "Too many clusters"
-  | [cluster] -> Lwt.return cluster
+  | [cluster] ->
+      call_rpc ~context Cluster_host.get_all >>=
+      Lwt_list.iter_p (fun self ->
+        call_rpc ~context Cluster_host.get_enabled ~self >>= function
+        | false -> call_rpc ~context Cluster_host.enable ~self
+        | true -> Lwt.return_unit
+      ) >>= fun () ->
+      Lwt.return cluster
   | [] ->
     get_management_pifs ~context >>= function
     | [] -> Lwt.fail_with "No management interface found"
@@ -285,7 +292,7 @@ let enable_clustering ~context =
 
 let cluster_host_allowed_operations ~context cluster =
   call_rpc ~context Cluster_host.get_all >>=
-  Lwt_list.iter_s (fun self ->
+  Lwt_list.iter_p (fun self ->
       call_rpc ~context Cluster_host.get_allowed_operations ~self >>= fun operations ->
       Logs.debug (fun m -> m "Got %d operations" (List.length operations));
       Lwt_list.iter_s (function
@@ -298,9 +305,7 @@ let cluster_host_allowed_operations ~context cluster =
         ) operations)
 
 let get_master ~context =
-  call_rpc ~context Pool.get_all >>= fun pools ->
-  let pool = List.hd pools in
-  call_rpc ~context Pool.get_master ~self:pool
+  call_rpc ~context Session.get_this_host ~self:context.session_id
 
 let probe ~context ~iscsi ~iqn =
   (* probe as if it was an iSCSI SR, since we don't have probe for GFS2 yet *)
@@ -353,24 +358,61 @@ let get_gfs2_sr ~context ~iscsi ~iqn =
     Lwt.return existing
   | [] -> create_gfs2_sr ~context ~iscsi ~iqn
 
-let license_hosts ~context ~license_server ~license_server_port =
-  Logs.debug (fun m -> m "Configuring license server");
-  call_rpc ~context Host.get_all >>= fun hosts ->
-  Lwt_list.iter_p (fun self ->
-      call_rpc ~context Host.remove_from_license_server ~self ~key:"port" >>= fun () ->
-      call_rpc ~context Host.add_to_license_server ~self ~key:"port" ~value:(string_of_int license_server_port) >>= fun () ->
-      call_rpc ~context Host.remove_from_license_server ~self ~key:"address" >>= fun () ->
-      call_rpc ~context Host.add_to_license_server ~self ~key:"address" ~value:license_server) hosts >>= fun () ->
+let get_pool ~context =
   call_rpc ~context Pool.get_all >>= fun pools ->
-  let pool = List.hd pools in
-  Logs.debug (fun m -> m "Applying license to pool");
-  call_rpc ~context Pool.apply_edition ~self:pool ~edition:"enterprise-per-socket" >>= fun () ->
-  Logs.debug (fun m -> m "License OK");
-  Lwt.return_unit
+  Lwt.return (List.hd pools)
+
+let license_hosts ~context ~license_server ~license_server_port =
+  get_pool ~context >>= fun pool ->
+  call_rpc ~context Pool.get_license_state ~self:pool >>= fun state ->
+  Logs.debug (fun m -> m "license state: %a"
+    Fmt.Dump.(list (pair Fmt.string Fmt.string)) state);
+  if List.mem_assoc "edition" state && List.assoc "edition" state <> "" then begin
+    Logs.debug(fun m -> m "Already licensed");
+    Lwt.return_unit
+  end else begin
+    Logs.debug (fun m -> m "Configuring license server");
+    call_rpc ~context Host.get_all >>= fun hosts ->
+    Lwt_list.iter_p (fun self ->
+        call_rpc ~context Host.remove_from_license_server ~self ~key:"port" >>= fun () ->
+        call_rpc ~context Host.add_to_license_server ~self ~key:"port" ~value:(string_of_int license_server_port) >>= fun () ->
+        call_rpc ~context Host.remove_from_license_server ~self ~key:"address" >>= fun () ->
+        call_rpc ~context Host.add_to_license_server ~self ~key:"address" ~value:license_server) hosts >>= fun () ->
+    Logs.debug (fun m -> m "Applying license to pool");
+    call_rpc ~context Pool.apply_edition ~self:pool ~edition:"enterprise-per-socket" >>= fun () ->
+    Logs.debug (fun m -> m "License OK");
+    Lwt.return_unit
+  end
 
 let do_ha ~context ~sr =
-  Logs.debug (fun m -> m "Enabling HA");
-  call_rpc ~context Pool.enable_ha ~heartbeat_srs:[sr] ~configuration:[] >>= fun () ->
-  Logs.debug (fun m -> m "HA enabled");
-  Lwt.return_unit
+  get_pool ~context >>= fun pool ->
+  call_rpc ~context Pool.get_ha_enabled ~self:pool >>= function
+  | true ->
+      Logs.debug (fun m -> m "HA is already enabled");
+      Lwt.return_unit
+  | false ->
+      Logs.debug (fun m -> m "Enabling HA");
+      call_rpc ~context Pool.enable_ha ~heartbeat_srs:[sr] ~configuration:[] >>= fun () ->
+      Logs.debug (fun m -> m "HA enabled");
+      Lwt.return_unit
 
+
+let undo_ha ~context =
+  get_pool ~context >>= fun pool ->
+  call_rpc ~context Pool.get_ha_enabled ~self:pool >>= function
+    | false ->
+        Logs.debug (fun m -> m "HA is already disabled");
+        Lwt.return_unit
+    | true ->
+        Logs.debug (fun m -> m "Disabling HA");
+        call_rpc ~context Pool.disable_ha >>= fun () ->
+        Logs.debug (fun m -> m "HA disabled");
+        Lwt.return_unit
+
+let detach_sr ~context ~sr =
+  call_rpc ~context SR.get_PBDs ~self:sr >>= fun pbds ->
+  Lwt_list.iter_p (fun pbd ->
+    Logs.debug (fun m -> m "PBD unplug");
+    call_rpc ~context PBD.unplug ~self:pbd) pbds >>= fun () ->
+  Logs.debug (fun m -> m "Forgetting SR");
+  call_rpc ~context SR.forget ~sr

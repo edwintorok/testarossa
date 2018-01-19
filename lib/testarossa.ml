@@ -41,6 +41,16 @@ let find_vm ~context ~name =
   Logs.debug (fun m -> m "found VMs with name \"%s\":@,%a" name Fmt.(list (using snd PP.vm_record)) vms);
   Lwt.return vms
 
+let find_vms ~context =
+  call_rpc ~context VM.get_all_records >>= fun lst ->
+  lst
+  |> List.filter (fun (vmref, vmr) ->
+    not vmr.API.vM_is_a_template &&
+    not vmr.API.vM_is_a_snapshot &&
+    not vmr.API.vM_is_control_domain &&
+    List.mem_assoc "box_name" vmr.API.vM_other_config)
+  |> Lwt.return
+
 let find_templates ~context ~name =
   (* get_all_records_where doesn't seem to be able to filter on name_label/name-label *)
   call_rpc ~context VM.get_by_name_label ~label:name >>=
@@ -194,7 +204,8 @@ let choose_master masters =
     List.fold_left (fun (got_master, prev) ip ->
         let master =
           if Ipaddr.V4.compare prev ip = 0 then
-            if got_master <> None then failwith "multiple pools found"
+            if got_master <> None &&
+            got_master <> Some ip then failwith "multiple pools found"
             else Some ip
           else got_master in
         master, ip) (None, Ipaddr.V4.any) |> fst in
@@ -232,7 +243,47 @@ let fix_management_interfaces ~context ~master =
   | [] ->
     Lwt.fail_with ("Cannot find PIF for master IP: " ^ ip)
 
-let make_pool ~context ips =
+let maybe_license_host ~context = function
+  | Some license_server, Some license_server_port ->
+      call_rpc ~context Session.get_this_host ~self:context.session_id >>= fun self ->
+      call_rpc ~context Host.get_license_server ~self >>= fun map ->
+      if List.mem ("address", license_server) map then begin
+        Logs.debug (fun m -> m "Already have license server: %a" Fmt.Dump.(list
+        (pair Fmt.string Fmt.string)) map);
+        Lwt.return_unit
+      end else begin
+        Logs.debug (fun m -> m "Configuring license server on %s" context.machine);
+        call_rpc ~context Host.remove_from_license_server ~self ~key:"port" >>= fun () ->
+        call_rpc ~context Host.add_to_license_server ~self ~key:"port" ~value:(string_of_int license_server_port) >>= fun () ->
+        call_rpc ~context Host.remove_from_license_server ~self ~key:"address" >>= fun () ->
+        call_rpc ~context Host.add_to_license_server ~self ~key:"address" ~value:license_server
+      end
+  | _ ->
+      Logs.debug (fun m -> m "No license server given");
+      Lwt.return_unit
+
+let get_pool ~context =
+  call_rpc ~context Pool.get_all >>= fun pools ->
+  Lwt.return (List.hd pools)
+
+let maybe_license_pool ~context =
+  get_pool ~context >>= fun pool ->
+  call_rpc ~context Pool.get_license_state ~self:pool >>= fun state ->
+  Logs.debug (fun m -> m "license state: %a"
+    Fmt.Dump.(list (pair Fmt.string Fmt.string)) state);
+(*  if List.mem_assoc "edition" state && List.assoc "edition" state = "enterprise-per-socket" then begin
+    Logs.debug(fun m -> m "Already licensed");
+    Lwt.return_unit
+  end else *)begin
+    Logs.debug (fun m -> m "Applying license to pool");
+    call_rpc ~context Pool.apply_edition ~self:pool ~edition:"enterprise-per-socket" >>= fun () ->
+    Logs.debug (fun m -> m "License OK");
+    Lwt.return_unit
+  end
+
+
+(* TODO: handle HOST_OFFLINE *)
+let make_pool ~context ?license_server ?license_server_port ips =
   Lwt_list.map_p (get_master ~context) ips >>= fun masters ->
   match choose_master masters with
   | None ->
@@ -241,9 +292,12 @@ let make_pool ~context ips =
     let slaves = List.filter (fun ip -> Ipaddr.V4.compare ip master <> 0) masters in
     Logs.debug (fun m -> m "We need to join %a to %a" Fmt.(Dump.list Ipaddr.V4.pp_hum) slaves Ipaddr.V4.pp_hum master);
     let master_address = Ipaddr.V4.to_string master in
+    maybe_license_host ~context (license_server, license_server_port) >>= fun () ->
+    maybe_license_pool ~context >>= fun () ->
     slaves |>
     Lwt_list.iter_p (fun ip ->
         with_session ~uname:context.uname ~pwd:context.pwd ~machine:(Ipaddr.V4.to_string ip) (fun ~context ->
+            maybe_license_host ~context (license_server, license_server_port) >>= fun () ->
             call_rpc ~context Pool.join ~master_address ~master_username:context.uname ~master_password:context.pwd)) >>= fun () ->
     Lwt.return master
 
@@ -254,7 +308,7 @@ let with_pool ~context master f =
         Logs.debug (fun m -> m "Waiting for all hosts to be enabled in the pool");
         call_rpc ~context Host.get_all_records >>= fun hrecs ->
         if List.exists (fun (_,r) -> not r.API.host_enabled) hrecs then
-          Lwt_unix.sleep 0.1 >>= wait_enabled
+          Lwt_unix.sleep 0.3 >>= wait_enabled
         else Lwt.return_unit
       in
       wait_enabled () >>= fun () ->
@@ -276,6 +330,7 @@ let enable_clustering ~context =
         | false -> call_rpc ~context Cluster_host.enable ~self
         | true -> Lwt.return_unit
       ) >>= fun () ->
+      Logs.debug (fun m -> m "got cluster");
       Lwt.return cluster
   | [] ->
     get_management_pifs ~context >>= function
@@ -353,36 +408,17 @@ let get_gfs2_sr ~context ~iscsi ~iqn =
   (* TODO: check iqn etc *)
   Logs.debug (fun m -> m "Looking for GFS2 SR");
   call_rpc ~context SR.get_all_records_where ~expr:{|field "type" = "gfs2"|} >>= function
-  | (existing, _) :: _ ->
+  | (sr, _) :: _ ->
     Logs.debug (fun m -> m "Found existing GFS2 SR");
-    Lwt.return existing
+    call_rpc ~context SR.get_PBDs ~self:sr >>= fun pbds ->
+    Lwt_list.iter_p (fun pbd ->
+      call_rpc ~context PBD.get_currently_attached ~self:pbd >>= function
+      | true -> Lwt.return_unit
+      | false ->
+      Logs.debug (fun m -> m "PBD plug");
+      call_rpc ~context PBD.plug ~self:pbd) pbds >>= fun () ->
+    Lwt.return sr
   | [] -> create_gfs2_sr ~context ~iscsi ~iqn
-
-let get_pool ~context =
-  call_rpc ~context Pool.get_all >>= fun pools ->
-  Lwt.return (List.hd pools)
-
-let license_hosts ~context ~license_server ~license_server_port =
-  get_pool ~context >>= fun pool ->
-  call_rpc ~context Pool.get_license_state ~self:pool >>= fun state ->
-  Logs.debug (fun m -> m "license state: %a"
-    Fmt.Dump.(list (pair Fmt.string Fmt.string)) state);
-  if List.mem_assoc "edition" state && List.assoc "edition" state <> "" then begin
-    Logs.debug(fun m -> m "Already licensed");
-    Lwt.return_unit
-  end else begin
-    Logs.debug (fun m -> m "Configuring license server");
-    call_rpc ~context Host.get_all >>= fun hosts ->
-    Lwt_list.iter_p (fun self ->
-        call_rpc ~context Host.remove_from_license_server ~self ~key:"port" >>= fun () ->
-        call_rpc ~context Host.add_to_license_server ~self ~key:"port" ~value:(string_of_int license_server_port) >>= fun () ->
-        call_rpc ~context Host.remove_from_license_server ~self ~key:"address" >>= fun () ->
-        call_rpc ~context Host.add_to_license_server ~self ~key:"address" ~value:license_server) hosts >>= fun () ->
-    Logs.debug (fun m -> m "Applying license to pool");
-    call_rpc ~context Pool.apply_edition ~self:pool ~edition:"enterprise-per-socket" >>= fun () ->
-    Logs.debug (fun m -> m "License OK");
-    Lwt.return_unit
-  end
 
 let do_ha ~context ~sr =
   get_pool ~context >>= fun pool ->
@@ -409,10 +445,25 @@ let undo_ha ~context =
         Logs.debug (fun m -> m "HA disabled");
         Lwt.return_unit
 
-let detach_sr ~context ~sr =
+let unplug_pbds ~context ~sr =
   call_rpc ~context SR.get_PBDs ~self:sr >>= fun pbds ->
   Lwt_list.iter_p (fun pbd ->
     Logs.debug (fun m -> m "PBD unplug");
-    call_rpc ~context PBD.unplug ~self:pbd) pbds >>= fun () ->
+    call_rpc ~context PBD.unplug ~self:pbd) pbds
+
+let plug_pbds ~context ~sr =
+  call_rpc ~context SR.get_PBDs ~self:sr >>= fun pbds ->
+  Lwt_list.iter_p (fun pbd ->
+    Logs.debug (fun m -> m "PBD plug");
+    call_rpc ~context PBD.plug ~self:pbd) pbds
+
+let detach_sr ~context ~sr =
+  unplug_pbds ~context ~sr >>= fun () ->
   Logs.debug (fun m -> m "Forgetting SR");
   call_rpc ~context SR.forget ~sr
+
+let rec repeat n f =
+  if n = 0 then Lwt.return_unit
+  else f () >>= fun () ->
+    repeat (n-1) f
+

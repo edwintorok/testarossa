@@ -246,18 +246,18 @@ let fix_management_interfaces ~context ~master =
 let maybe_license_host ~context = function
   | Some license_server, Some license_server_port ->
       call_rpc ~context Session.get_this_host ~self:context.session_id >>= fun self ->
-      call_rpc ~context Host.get_license_server ~self >>= fun map ->
-      if List.mem ("address", license_server) map then begin
-        Logs.debug (fun m -> m "Already have license server: %a" Fmt.Dump.(list
-        (pair Fmt.string Fmt.string)) map);
-        Lwt.return_unit
-      end else begin
+      call_rpc ~context Host.get_edition ~self >>= fun edition ->
+      if edition <> "enterprise-per-socket" then begin
         Logs.debug (fun m -> m "Configuring license server on %s" context.machine);
         call_rpc ~context Host.remove_from_license_server ~self ~key:"port" >>= fun () ->
         call_rpc ~context Host.add_to_license_server ~self ~key:"port" ~value:(string_of_int license_server_port) >>= fun () ->
         call_rpc ~context Host.remove_from_license_server ~self ~key:"address" >>= fun () ->
-        call_rpc ~context Host.add_to_license_server ~self ~key:"address" ~value:license_server
-      end
+        call_rpc ~context Host.add_to_license_server ~self ~key:"address" ~value:license_server >>= fun () ->
+        call_rpc ~context Host.apply_edition ~host:self ~edition:"enterprise-per-socket" ~force:true
+    end else begin
+        Logs.debug (fun m -> m "Already have license edition %s" edition);
+        Lwt.return_unit
+    end
   | _ ->
       Logs.debug (fun m -> m "No license server given");
       Lwt.return_unit
@@ -271,10 +271,10 @@ let maybe_license_pool ~context =
   call_rpc ~context Pool.get_license_state ~self:pool >>= fun state ->
   Logs.debug (fun m -> m "license state: %a"
     Fmt.Dump.(list (pair Fmt.string Fmt.string)) state);
-(*  if List.mem_assoc "edition" state && List.assoc "edition" state = "enterprise-per-socket" then begin
+  if List.mem_assoc "edition" state && List.assoc "edition" state = "enterprise-per-socket" then begin
     Logs.debug(fun m -> m "Already licensed");
     Lwt.return_unit
-  end else *)begin
+  end else begin
     Logs.debug (fun m -> m "Applying license to pool");
     call_rpc ~context Pool.apply_edition ~self:pool ~edition:"enterprise-per-socket" >>= fun () ->
     Logs.debug (fun m -> m "License OK");
@@ -303,7 +303,6 @@ let make_pool ~context ?license_server ?license_server_port ips =
 
 let with_pool ~context master f =
   with_session ~uname:context.uname ~pwd:context.pwd ~machine:(Ipaddr.V4.to_string master) (fun ~context ->
-      fix_management_interfaces ~context ~master >>= fun () ->
       let rec wait_enabled () =
         Logs.debug (fun m -> m "Waiting for all hosts to be enabled in the pool");
         call_rpc ~context Host.get_all_records >>= fun hrecs ->
@@ -312,6 +311,7 @@ let with_pool ~context master f =
         else Lwt.return_unit
       in
       wait_enabled () >>= fun () ->
+      fix_management_interfaces ~context ~master >>= fun () ->
       Logs.debug (fun m -> m "All hosts enabled in the pool, master is: %a" Ipaddr.V4.pp_hum master);
       f ~context)
 
@@ -467,3 +467,14 @@ let rec repeat n f =
   else f () >>= fun () ->
     repeat (n-1) f
 
+
+let pool_reboot ~context =
+  get_master ~context >>= fun master ->
+  call_rpc ~context Host.get_all >>= fun hosts ->
+  hosts
+  |> List.filter (fun host -> host <> master)
+  |> Lwt_list.iter_p (fun host ->
+    call_rpc ~context Host.get_name_label ~self:host >>= fun nl ->
+    call_rpc ~context Host.disable ~host >>= fun () ->
+    Logs.debug (fun m -> m "Rebooting host %s" nl);
+    call_rpc ~context Host.reboot ~host)

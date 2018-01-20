@@ -29,9 +29,12 @@ let main =
           | Some iscsi, Some iqn ->
             get_gfs2_sr ~context ~iscsi ~iqn >>= fun gfs2 ->
             Logs.debug (fun m -> m "got SR");
-            repeat 100 (fun () ->
+            (*repeat 100 (fun () ->
                 unplug_pbds ~context ~sr:gfs2 >>= fun () ->
-                plug_pbds ~context ~sr:gfs2)
+                plug_pbds ~context ~sr:gfs2)*)
+            repeat 10 (fun () ->
+              pool_reboot ~context
+            )
             (*do_ha ~context ~sr:gfs2 >>= fun () ->
               undo_ha ~context >>= fun () ->
                 detach_sr ~context ~sr:gfs2 >>= fun () ->

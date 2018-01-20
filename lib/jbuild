@@ -2,4 +2,4 @@
 (library
  ((name testarossa)
   (public_name testarossa)
-  (libraries (ezjsonm ezxmlm ipaddr astring logs fmt xen-api-client-lwt bos))))
+  (libraries (ezjsonm ezxmlm ipaddr astring logs fmt xen-api-client-lwt bos xcp.v6))))

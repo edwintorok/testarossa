@@ -29,4 +29,5 @@ module PP : sig
   val records : 'b Fmt.t -> ('a Ref.t * 'b) list Fmt.t
   val features : Features.feature list Fmt.t
   val host : host Fmt.t
+  val pif : API.pIF_t Fmt.t
 end

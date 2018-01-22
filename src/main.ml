@@ -17,10 +17,61 @@ let edition = OS.Arg.(opt ["edition"] string ~absent:"enterprise-per-socket")
 (* physical XS host containing the virtual XS hosts if any *)
 let physical = OS.Arg.(opt ["physical"] ~absent:None (some string))
 
-let main =
+let rollback = OS.Arg.flag ["rollback"]
+
+let uname = "root" (* TODO: with_default_session read from . file *)
+let pwd = ""
+
+let init_physical () =
+  match physical with
+  | Some host ->
+     Context.debug (fun m -> m "Logging in to physical host %s" host) >>= fun () ->
+     Context.login ~uname ~pwd host >>= fun phys ->
+     Rollback.ensure_pool_snapshot phys >>= fun () ->
+     Lwt.return_some phys
+  | None -> Lwt.return_none
+
+let sync t =
+  let open Xen_api_lwt_unix in
+  let open Context in
+  rpc t (fun _ -> Pool.sync_database)
+
+let main () =
   let ips = OS.Arg.(parse ~pos:ip ()) in
-  Context.login ~uname:"root" ~pwd:"xenroot" "10.71.217.7" >>= fun ctx ->
-  License.maybe_apply_license_pool ctx ?license_server ~license_server_port ~edition [Features.HA; Features.Corosync]
+  init_physical () >>= fun phys ->
+
+   Logs.debug (fun m -> m "rollback: %b" rollback);
+  (match phys, rollback with
+   | Some phys, true ->
+      Rollback.rollback_pool phys
+   | _ -> Lwt.return_unit)
+
+  >>= fun () ->
+
+  Test_sr.make_pool ~uname ~pwd ips >>= fun t ->
+  (* TODO: do before/after too *)
+  sync t >>= fun () ->
+
+  
+  License.maybe_apply_license_pool t ?license_server ~license_server_port ~edition [Features.HA; Features.Corosync] >>= fun () ->
+
+  Test_sr.enable_clustering t >>= fun cluster ->
+  match iscsi, iqn with
+  | Some iscsi, Some iqn ->
+     Context.rpc t (fun ctx ~rpc ~session_id ->
+         Test_sr.get_gfs2_sr ctx ~iscsi ~iqn ?scsiid () >>= fun gfs2 ->
+(*         Test_sr.plug_pbds ctx gfs2 >>= fun () ->
+         Test_sr.unplug_pbds ctx gfs2 >>= fun () ->
+         Test_sr.plug_pbds ctx gfs2 >>= fun () ->
+         Test_sr.unplug_pbds ctx gfs2 >>= fun () ->*)
+         (*Test_sr.do_ha ctx gfs2 >>= fun () ->
+         Test_sr.undo_ha ctx >>= fun () ->*)
+         Test_sr.pool_reboot ctx >>= fun () ->
+         Lwt.return_unit
+       )
+  | _ ->
+     Lwt.return_unit
+
 (*  with_default_session (fun ~context ->
       find_templates ~context ~name:"XenServer" >>= fun lst ->
       Lwt_list.iter_p (make_xenserver_template ~context) lst >>= fun () ->
@@ -56,4 +107,4 @@ let () =
   |> R.map int_of_string
   |> Logs.on_error_msg ~use:(fun () -> 80)
   |> Format.set_margin;
-  Lwt_main.run main
+  Lwt_main.run (main ())

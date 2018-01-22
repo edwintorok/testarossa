@@ -100,4 +100,7 @@ module PP = struct
 
   let host ppf h =
     Fmt.pf ppf "@[%s(%s)@]" h.name h.ip
+
+  let pif ppf pifr =
+    Fmt.pf ppf "%s" pifr.API.pIF_uuid
 end

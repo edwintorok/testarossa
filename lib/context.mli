@@ -2,25 +2,31 @@ open Xen_api_lwt_unix
 type rpc = Rpc.call -> Rpc.response Lwt.t
 type session_info =
   { master: string
+  ; ctx_rpc : rpc
   ; session_id: API.ref_session
   ; master_ref: API.ref_host
   ; pool_ref: API.ref_pool }
-type +'a t
-val return : 'a -> 'a t
-val (>>=) : 'a t -> ('a -> 'b t) -> 'b t
-val lift : ('a -> 'b Lwt.t) -> 'a -> 'b t
-val rpc : (rpc:rpc -> session_id:API.ref_session -> 'a Lwt.t) -> 'a t
-val lift_lwt : (('a -> 'b Lwt.t) -> 'c Lwt.t) -> ('a -> 'b t) -> 'c t
-val lift_lwt' : (('a -> 'b Lwt.t) -> 'c -> 'd Lwt.t) -> ('a -> 'b t) -> 'c -> 'd t
-val liftF : (session_info -> 'a -> 'b t) -> 'a -> 'b t
+type t
 
-type 'a log = ('a, unit t) Logs.msgf -> unit t
+val login : ?max_expiration_retry:int -> ?timeout:float -> uname:string -> pwd:string -> string -> t Lwt.t
+
+val rpc : t -> (session_info -> rpc:rpc -> session_id:API.ref_session -> 'a Lwt.t) -> 'a Lwt.t
+val rpc' : session_info -> (rpc:rpc -> session_id:API.ref_session -> 'a Lwt.t) -> 'a Lwt.t
+
+type 'a log = 'a Logs_lwt.log
 val debug : 'a log
 val info : 'a log
 val warn : 'a log
 val err : 'a log
 
+type host = {name: string; ip: string}
+val get_host_pp : session_info -> API.ref_host -> host Lwt.t
+
 module PP : sig
   val dict : (string * string) list Fmt.t
   val rpc_t : Rpc.t Fmt.t
+  val feature : API.feature_t Fmt.t
+  val records : 'b Fmt.t -> ('a Ref.t * 'b) list Fmt.t
+  val features : Features.feature list Fmt.t
+  val host : host Fmt.t
 end

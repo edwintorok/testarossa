@@ -1,4 +1,4 @@
-HOSTS=xcluster1 xcluster2 xcluster3 xcluster4 xcluster5 xcluster6 xcluster7 xcluster8 xcluster9 xcluster10 xcluster11 xcluster12 xcluster13 xcluster14 xcluster15 xcluster16
+HOSTS=xcluster1 xcluster2 xcluster3 xcluster4
 ssh-config: $(foreach host,$(HOSTS),.vagrant/machines/$(host)/xenserver/id)
 	vagrant ssh-config $(HOSTS) > $@
 

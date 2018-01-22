@@ -8,13 +8,20 @@ let ip = OS.Arg.conv ~docv:"IP" (fun s ->
 
 let iscsi = OS.Arg.(opt ~docv:"iscsi" ["iscsi"] ~absent:None (some ip))
 let iqn = OS.Arg.(opt ~docv:"iqn" ["iqn"] ~absent:None (some string))
+let scsiid = OS.Arg.(opt ~docv:"SCSIid" ["scsiid"] ~absent:None (some string))
 
 let license_server = OS.Arg.(opt ["license-server-address"] ~absent:None (some string))
 let license_server_port = OS.Arg.(opt ["license-server-port"] int ~absent:27000)
+let edition = OS.Arg.(opt ["edition"] string ~absent:"enterprise-per-socket")
+
+(* physical XS host containing the virtual XS hosts if any *)
+let physical = OS.Arg.(opt ["physical"] ~absent:None (some string))
 
 let main =
   let ips = OS.Arg.(parse ~pos:ip ()) in
-  with_default_session (fun ~context ->
+  Context.login ~uname:"root" ~pwd:"xenroot" "10.71.217.7" >>= fun ctx ->
+  License.maybe_apply_license_pool ctx ?license_server ~license_server_port ~edition [Features.HA; Features.Corosync]
+(*  with_default_session (fun ~context ->
       find_templates ~context ~name:"XenServer" >>= fun lst ->
       Lwt_list.iter_p (make_xenserver_template ~context) lst >>= fun () ->
       find_vms ~context >>= fun vms ->
@@ -40,7 +47,7 @@ let main =
                 detach_sr ~context ~sr:gfs2 >>= fun () ->
                   cluster_host_allowed_operations ~context cluster >>= fun () >
               Lwt.return_unit*)
-        ))
+        )) *)
 
 let () =
   Printexc.record_backtrace true;

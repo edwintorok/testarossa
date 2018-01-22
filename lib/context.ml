@@ -3,8 +3,9 @@ open Xen_api_lwt_unix
 let src =
   Logs.Src.create "testarossa" ~doc:"logs testarossa events"
 
+include (val (Logs_lwt.src_log src : (module Logs_lwt.LOG)))
+type 'a log = 'a Logs_lwt.log
 
-module Log = (val (Logs_lwt.src_log src : (module Logs_lwt.LOG)))
 
 let version = "1.1"
 
@@ -14,18 +15,20 @@ type rpc = Rpc.call -> Rpc.response Lwt.t
 
 type session_info =
   { master: string
+  ; ctx_rpc: rpc
   ; session_id: API.ref_session
   ; master_ref: API.ref_host
-  ; pool_ref: API.ref_pool }
+  ; pool_ref: API.ref_pool
+  }
 
-type env =
+type t =
   {rpc: rpc; session: session_info Singleton.t; max_expiration_retry: int}
 
-let login ?(max_expiration_retry= 3) ?(timeout= 5.0) ~uname ~pwd ~master =
+let login ?(max_expiration_retry= 3) ?(timeout= 5.0) ~uname ~pwd master =
   let open Lwt.Infix in
-  let rpc = make_json ~timeout ("https://" ^ master) in
+  let rpc = make ~timeout ("https://" ^ master) in
   let login () =
-    Log.debug (fun m -> m "Logging in to %s as %s" master uname)
+    debug (fun m -> m "Logging in to %s as %s" master uname)
     >>= fun () ->
     Session.login_with_password ~rpc ~uname ~pwd ~version ~originator
     >>= fun session_id ->
@@ -34,93 +37,67 @@ let login ?(max_expiration_retry= 3) ?(timeout= 5.0) ~uname ~pwd ~master =
       | [pool_ref] ->
           Pool.get_master ~rpc ~session_id ~self:pool_ref
           >>= fun master_ref ->
-          Lwt.return {master; session_id; master_ref; pool_ref}
+          Lwt.return {master; ctx_rpc=rpc; session_id; master_ref; pool_ref}
       | [] ->
-          Log.err (fun m -> m "No pools found on %s" master)
+          err (fun m -> m "No pools found on %s" master)
           >>= fun () -> Lwt.fail_with "No pools found"
       | _ :: _ :: _ ->
-          Log.err (fun m -> m "Too many pools on %s" master)
+          err (fun m -> m "Too many pools on %s" master)
           >>= fun () -> Lwt.fail_with "Too many pools"
   in
   let r = {rpc; max_expiration_retry; session= Singleton.create login} in
   Singleton.get r.session
   >>= fun info ->
-  Log.debug (fun m ->
+  debug (fun m ->
       let session_id = info.session_id in
       Session.get_uuid ~rpc:r.rpc ~session_id ~self:session_id
       >>= fun uuid -> m "Got session id %s" uuid )
   >>= fun () -> Lwt.return r
 
-
-type +'a t = env -> 'a Lwt.t
+let rpc' info f = f ~rpc:info.ctx_rpc ~session_id:info.session_id
 
 (* call [f ~rpc ~session_id] and retry by logging in again on [Api_errors.session_invalid] *)
-let rpc f e =
+let rpc ctx f =
   let open Lwt.Infix in
   let rec retry = function
-    | n when n > e.max_expiration_retry ->
+    | n when n > ctx.max_expiration_retry ->
         Logs.debug (fun m -> m "Maximum number of retries exceeded") ;
         Lwt.fail_with "Maximum number of retries exceeded"
     | n ->
-        Singleton.get e.session
+        Singleton.get ctx.session
         >>= fun session ->
         Lwt.catch
-          (fun () -> f ~rpc:e.rpc ~session_id:session.session_id)
+          (fun () -> f session ~rpc:session.ctx_rpc ~session_id:session.session_id)
           (function
               | Api_errors.Server_error (code, _)
                 when code = Api_errors.session_invalid ->
-                  Log.debug (fun m -> m "Session is not valid (try #%d)!" n)
+                  debug (fun m -> m "Session is not valid (try #%d)!" n)
                   >>= fun () ->
-                  Singleton.invalidate e.session session ;
+                  Singleton.invalidate ctx.session session ;
                   retry (n + 1)
               | e ->
                   Lwt.fail e)
   in
   retry 0
 
-
-let lift f x _ = f x
-
-let return x = lift Lwt.return x
-
-let ( >>= ) m f e = Lwt.bind (m e) (fun r -> f r e)
-let liftF f x e =
-  Lwt.bind (Singleton.get e.session) (fun r -> f r x e)
-
-
-let lift_lwt f g e =
-  let g' v = g v e in
-  f g'
-
-let lift_lwt' f g x e =
-  let g' v = g v e in
-  f g' x
-
-let return_unit  : unit t = fun _ -> Lwt.return_unit
-
-let check_level level =
-  if level = Logs.Error then Logs.incr_err_count () else
-    if level = Logs.Warning then Logs.incr_warn_count ()
-
-type 'a log = ('a, unit t) Logs.msgf -> unit t
-let msg level msgf = match Logs.Src.level src with
-| None -> return_unit
-| Some level' when level > level' ->
-    check_level level; return_unit
-| Some _ ->
-    check_level level;
-    let (ret, unblock) = Lwt.wait () in
-    let k () : unit t = fun _ -> ret in
-    let over () = Lwt.wakeup unblock () in
-    Logs.report src level ~over k msgf
-
-let debug msgf = msg Logs.Debug msgf
-let info msgf = msg Logs.Info msgf
-let warn msgf = msg Logs.Warning msgf
-let err msgf = msg Logs.Error msgf
+type host = {name: string; ip: string}
+let get_host_pp ctx self =
+  let name = rpc' ctx @@ Host.get_name_label ~self
+  and ip = rpc' ctx @@ Host.get_address ~self in
+  name >>= fun name ->
+  ip >>= fun ip ->
+  Lwt.return { name; ip }
+                                            
 
 module PP = struct
   open Fmt
   let dict = Dump.(pair string string |> list)
-  let rpc_t = Fmt.using Jsonrpc.to_string string
+  let rpc_t = using Jsonrpc.to_string string
+  let feature = using API.rpc_of_feature_t rpc_t
+  let records pp_elt = Dump.(using snd pp_elt |> list)
+
+  let features = using Features.to_compact_string string
+
+  let host ppf h =
+    Fmt.pf ppf "@[%s(%s)@]" h.name h.ip
 end

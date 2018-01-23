@@ -22,29 +22,29 @@ let rollback = OS.Arg.flag ["rollback"]
 let uname = "root" (* TODO: with_default_session read from . file *)
 let pwd = ""
 
-let init_physical () =
+let with_physical f =
   match physical with
   | Some host ->
      Context.debug (fun m -> m "Logging in to physical host %s" host) >>= fun () ->
-     Context.login ~uname ~pwd host >>= fun phys ->
+     Context.with_login ~uname ~pwd host @@ fun phys ->
      Rollback.ensure_pool_snapshot phys >>= fun () ->
-     Lwt.return_some phys
-  | None -> Lwt.return_none
+     f phys
+  | None -> Lwt.return_unit
 
 let sync t =
   let open Xen_api_lwt_unix in
   let open Context in
-  rpc t (fun _ -> Pool.sync_database)
+  step t "Sync pool database" (fun ctx ->
+      rpc ctx Pool.sync_database)
 
 let main () =
   let ips = OS.Arg.(parse ~pos:ip ()) in
-  init_physical () >>= fun phys ->
-
-   Logs.debug (fun m -> m "rollback: %b" rollback);
-  (match phys, rollback with
-   | Some phys, true ->
-      Rollback.rollback_pool phys
-   | _ -> Lwt.return_unit)
+  with_physical (fun phys ->
+      Logs.debug (fun m -> m "rollback: %b" rollback);
+      if rollback then
+        Rollback.rollback_pool phys
+      else
+        Lwt.return_unit)
 
   >>= fun () ->
 
@@ -58,17 +58,15 @@ let main () =
   Test_sr.enable_clustering t >>= fun cluster ->
   match iscsi, iqn with
   | Some iscsi, Some iqn ->
-     Context.rpc t (fun ctx ~rpc ~session_id ->
-         Test_sr.get_gfs2_sr ctx ~iscsi ~iqn ?scsiid () >>= fun gfs2 ->
-(*         Test_sr.plug_pbds ctx gfs2 >>= fun () ->
+     Test_sr.get_gfs2_sr t ~iscsi ~iqn ?scsiid () >>= fun gfs2 ->
+     (*         Test_sr.plug_pbds ctx gfs2 >>= fun () ->
          Test_sr.unplug_pbds ctx gfs2 >>= fun () ->
          Test_sr.plug_pbds ctx gfs2 >>= fun () ->
          Test_sr.unplug_pbds ctx gfs2 >>= fun () ->*)
-         (*Test_sr.do_ha ctx gfs2 >>= fun () ->
+     (*Test_sr.do_ha ctx gfs2 >>= fun () ->
          Test_sr.undo_ha ctx >>= fun () ->*)
-         Test_sr.pool_reboot ctx >>= fun () ->
-         Lwt.return_unit
-       )
+     Test_sr.pool_reboot t >>= fun () ->
+     Lwt.return_unit
   | _ ->
      Lwt.return_unit
 

@@ -6,7 +6,8 @@ let get_management_pifs ctx =
   >>= Lwt_list.filter_p (fun self -> rpc ctx @@ PIF.get_management ~self)
 
 
-let enable_clustering ctx =
+let enable_clustering t =
+  step t "Enable clustering" @@ fun ctx ->
   debug (fun m -> m "Checking for existing cluster on pool")
   >>= fun () ->
   rpc ctx Cluster.get_all
@@ -168,7 +169,7 @@ let do_ha t sr =
         rpc ctx @@ Pool.enable_ha ~heartbeat_srs:[sr] ~configuration:[]
         >>= fun () -> debug (fun m -> m "HA enabled")
 
-let undo_ha ctx =
+let undo_ha t =
   step t "Disable HA" @@ fun ctx ->
   get_pool_master ctx >>= fun (pool, master) ->
   rpc ctx @@ Pool.get_ha_enabled ~self:pool
@@ -294,7 +295,8 @@ let rec wait_enabled ctx () =
 let fix_management_interfaces ctx =
   (* enabling HA will fail with "Not_found" if the host address IP doesn't match the IP used to join the servers,
      i.e. the management interface must be set to the interface containing the master's IP *)
-  rpc ctx @@ Host.get_address ~self:ctx.master_ref
+  get_pool_master ctx >>= fun (pool, master) ->
+  rpc ctx @@ Host.get_address ~self:master
   >>= fun ip ->
   rpc ctx PIF.get_all_records
   >>= fun pifs ->
@@ -344,16 +346,13 @@ let make_pool ~uname ~pwd ips =
       let master_address = Ipaddr.V4.to_string master in
       slaves
       |> Lwt_list.iter_p (fun ip ->
-             login ~uname ~pwd (Ipaddr.V4.to_string ip)
-             >>= fun t ->
-             rpc t
-             @@ fun _ ->
-             Pool.join ~master_address ~master_username:uname
-               ~master_password:pwd )
+             with_login ~uname ~pwd (Ipaddr.V4.to_string ip) (fun t ->
+               step t "Pool join" @@ fun ctx ->
+                rpc ctx @@ Pool.join ~master_address ~master_username:uname
+                 ~master_password:pwd ))
       >>= fun () ->
-      login ~uname ~pwd (Ipaddr.V4.to_string master)
-      >>= fun t ->
-      rpc t (fun ctx ~rpc ~session_id ->
+      with_login ~uname ~pwd (Ipaddr.V4.to_string master) (fun t ->
+      step t "Wait enabled" (fun ctx ->
           wait_enabled ctx ()
           >>= fun () ->
           fix_management_interfaces ctx
@@ -361,4 +360,4 @@ let make_pool ~uname ~pwd ips =
           debug (fun m ->
               m "All hosts enabled in the pool, master is: %a" Ipaddr.V4.pp_hum
                 master )
-          >>= fun () -> Lwt.return t )
+          >>= fun () -> Lwt.return t ))

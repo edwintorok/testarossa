@@ -4,27 +4,50 @@ open Context
 type 'a api = rpc:rpc -> session_id:API.ref_session -> 'a
 
 module type S = sig
+  val execute: Context.t -> unit Lwt.t
 end
 
 module type BEHAVIOUR = sig
   type t
   type operation
+  val name : string
+  val get_uuid : (self : t -> string Lwt.t) api               
   val get_allowed_operations : (self: t -> operation list Lwt.t) api
   val get_all : t list Lwt.t api
   val perform : Context.session -> t -> operation -> unit Lwt.t
 end
 
-module Make(B: BEHAVIOUR) : S = struct
-end
-
 let on_self ctx self op =
   rpc ctx (fun ~rpc ~session_id -> op ~rpc ~session_id ~self)
+
+module Make(B: BEHAVIOUR) : S = struct
+
+  let execute t =
+    step t B.name @@ fun ctx ->
+    let perform_allowed self =
+        on_self ctx self B.get_uuid >>= fun uuid ->
+        on_self ctx self B.get_allowed_operations >>= fun ops ->
+(*        debug (fun m -> m "Available operations on %s: %a" uuid
+                          Fmt.(using fst string |> list) ops) >>= fun () ->*)
+        Lwt_list.iter_s (fun (op) ->
+            (*            debug (fun m -> m "Performing %s on %s" op_name uuid) >>= fun () ->*)
+            B.perform ctx self op
+          ) ops
+    in
+    rpc ctx B.get_all >>= fun all ->
+    debug (fun m -> m "Performing operations serially") >>= fun () ->
+    Lwt_list.iter_s perform_allowed all >>= fun () ->
+    debug (fun m -> m "Performing operations in parallel") >>= fun () ->
+    Lwt_list.iter_p perform_allowed all
+end
 
 module Cluster_host_test = struct
   type t = API.ref_Cluster_host
   type operation = API.cluster_host_operation
 
   include Cluster_host
+
+  let name = "Cluster_host"
 
   let perform ctx self = function
     | `enable ->
@@ -44,6 +67,8 @@ module Cluster_test = struct
   type t = API.ref_Cluster
   type operation = API.cluster_operation
   include Cluster
+
+  let name = "Cluster"
 
   let contains ctx self =
     on_self ctx self Cluster.get_cluster_hosts
@@ -70,6 +95,8 @@ module Pool_test = struct
   let contains ctx self =
     (* there is only pool for now *)
     rpc ctx Host.get_all
+
+  let name = "Pool"
 
   let perform ctx self = function
     | `cluster_create ->
@@ -105,6 +132,7 @@ module SR_test = struct
   type operation = [`destroy | `forget | `pbd_create | `pbd_destroy | `plug | `scan | `unplug | `update | `vdi_clone | `vdi_create | `vdi_data_destroy | `vdi_destroy | `vdi_disable_cbt | `vdi_enable_cbt | `vdi_introduce | `vdi_list_changed_blocks | `vdi_mirror | `vdi_resize | `vdi_set_on_boot | `vdi_snapshot ]
 
   include SR
+  let name = "SR"
 
   let on_pbds ctx sr op =
     on_self ctx sr SR.get_PBDs >>=
@@ -156,6 +184,7 @@ module VDI_test = struct
   type operation = API.vdi_operations
   include VDI
 
+  let name = "VDI"
   let perform ctx self (op:operation) = match op with
     | `clone -> rpc ctx @@ VDI.clone ~driver_params:[] ~vdi:self >>= fun _ -> Lwt.return_unit
     | `data_destroy ->
@@ -194,6 +223,7 @@ module Host_test = struct
   type operation = [API.host_allowed_operations | `disable ]
   include Host
 
+  let name = "Host"
   let vm () = debug (fun m -> m "Tested as part of VM ops")
 
   let perform ctx host = function

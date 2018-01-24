@@ -55,7 +55,9 @@ let main () =
   
   License.maybe_apply_license_pool t ?license_server ~license_server_port ~edition [Features.HA; Features.Corosync] >>= fun () ->
 
-  Test_sr.enable_clustering t >>= fun cluster ->
+  Allowed_ops.T1.execute t
+
+ (* Test_sr.enable_clustering t >>= fun cluster ->
   match iscsi, iqn with
   | Some iscsi, Some iqn ->
      Test_sr.get_gfs2_sr t ~iscsi ~iqn ?scsiid () >>= fun gfs2 ->
@@ -68,7 +70,7 @@ let main () =
      Test_sr.pool_reboot t >>= fun () ->
      Lwt.return_unit
   | _ ->
-     Lwt.return_unit
+     Lwt.return_unit*)
 
 (*  with_default_session (fun ~context ->
       find_templates ~context ~name:"XenServer" >>= fun lst ->

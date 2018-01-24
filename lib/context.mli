@@ -1,5 +1,3 @@
-open Xen_api_lwt_unix
-
 type rpc = Rpc.call -> Rpc.response Lwt.t
 
 type t
@@ -7,7 +5,7 @@ type t
 type session
 
 val with_login :
-  ?max_expiration_retry:int -> ?timeout:float -> uname:string -> pwd:string
+  ?timeout:float -> uname:string -> pwd:string
   -> string -> (t -> 'a Lwt.t) -> 'a Lwt.t
 
 val step : t -> string -> (session -> 'a Lwt.t) -> 'a Lwt.t

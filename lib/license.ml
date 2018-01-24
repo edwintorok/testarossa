@@ -1,6 +1,5 @@
 open Xen_api_lwt_unix
 open Context
-open Astring
 
 type t = {server: string; edition: string; port: int}
 

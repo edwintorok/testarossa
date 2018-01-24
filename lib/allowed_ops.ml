@@ -10,6 +10,7 @@ end
 module type BEHAVIOUR = sig
   type t
   type operation
+  val rpc_of_operation : operation -> Rpc.t
   val name : string
   val get_uuid : (self : t -> string Lwt.t) api               
   val get_allowed_operations : (self: t -> operation list Lwt.t) api
@@ -21,22 +22,45 @@ let on_self ctx self op =
   rpc ctx (fun ~rpc ~session_id -> op ~rpc ~session_id ~self)
 
 module Make(B: BEHAVIOUR) : S = struct
+  let pp_operation =
+    Fmt.using B.rpc_of_operation PP.rpc_t
 
   let execute t =
     step t B.name @@ fun ctx ->
-    let perform_allowed self =
+    let seen = Hashtbl.create 17 in
+    let rec perform_allowed self =
+      Lwt.catch (fun () ->
         on_self ctx self B.get_uuid >>= fun uuid ->
         on_self ctx self B.get_allowed_operations >>= fun ops ->
-(*        debug (fun m -> m "Available operations on %s: %a" uuid
-                          Fmt.(using fst string |> list) ops) >>= fun () ->*)
-        Lwt_list.iter_s (fun (op) ->
-            (*            debug (fun m -> m "Performing %s on %s" op_name uuid) >>= fun () ->*)
-            B.perform ctx self op
-          ) ops
+        debug (fun m -> m "Available operations on %s: %a" uuid
+                          Fmt.(list pp_operation) ops) >>= fun () ->
+        match List.find_all (fun e -> not (Hashtbl.mem seen e)) ops with
+        | [] -> Lwt.return_unit
+        | op :: _ ->
+           Hashtbl.add seen op ();
+           debug (fun m -> m "Performing %a on %s" pp_operation op uuid) >>= fun () ->
+           Lwt.catch (fun () ->
+               B.perform ctx self op)
+             (function
+              | Api_errors.Server_error(code, ((msg :: _) as lst))
+                   when code = Api_errors.sr_backend_failure && msg = "NotImplementedError" ->
+                 warn (fun m -> m "Operation %a is not implemented: %a!" pp_operation op Fmt.(list string) lst) >>= fun () ->
+                 Lwt.return_unit
+              | e ->
+                 err (fun m -> m "Operation %a failed: %a" pp_operation op Fmt.exn e)
+             (* and keep going *)
+             ) >>= fun () ->
+           perform_allowed self
+        ) (function
+          | Api_errors.Server_error(code, _) when code = Api_errors.handle_invalid ->
+             (* fine, we've run destroy/forget *)
+             Lwt.return_unit
+          | e -> Lwt.fail e)
     in
     rpc ctx B.get_all >>= fun all ->
     debug (fun m -> m "Performing operations serially") >>= fun () ->
     Lwt_list.iter_s perform_allowed all >>= fun () ->
+    rpc ctx B.get_all >>= fun all ->
     debug (fun m -> m "Performing operations in parallel") >>= fun () ->
     Lwt_list.iter_p perform_allowed all
 end
@@ -44,6 +68,7 @@ end
 module Cluster_host_test = struct
   type t = API.ref_Cluster_host
   type operation = API.cluster_host_operation
+  let rpc_of_operation = API.rpc_of_cluster_host_operation                     
 
   include Cluster_host
 
@@ -53,6 +78,7 @@ module Cluster_host_test = struct
     | `enable ->
        rpc ctx @@ Cluster_host.enable ~self
     | `disable ->
+       (* TODO: when SR attached that requires cluster stack this should not be present *)
        rpc ctx @@ Cluster_host.disable ~self
 end
 
@@ -65,7 +91,8 @@ let get_management_pifs ctx =
 
 module Cluster_test = struct
   type t = API.ref_Cluster
-  type operation = API.cluster_operation
+  type operation = API.cluster_operation [@@deriving rpc]
+  let rpc_of_operation = API.rpc_of_cluster_operation                     
   include Cluster
 
   let name = "Cluster"
@@ -90,6 +117,7 @@ end
 module Pool_test = struct
   type t = API.ref_pool
   type operation = API.pool_allowed_operations
+  let rpc_of_operation = API.rpc_of_pool_allowed_operations
   
   include Pool
   let contains ctx self =
@@ -131,12 +159,18 @@ module SR_test = struct
   type t = [`SR] Ref.t
   type operation = [`destroy | `forget | `pbd_create | `pbd_destroy | `plug | `scan | `unplug | `update | `vdi_clone | `vdi_create | `vdi_data_destroy | `vdi_destroy | `vdi_disable_cbt | `vdi_enable_cbt | `vdi_introduce | `vdi_list_changed_blocks | `vdi_mirror | `vdi_resize | `vdi_set_on_boot | `vdi_snapshot ]
 
+  let rpc_of_operation _ = Rpc.String "TODO"                     
+
   include SR
   let name = "SR"
 
   let on_pbds ctx sr op =
     on_self ctx sr SR.get_PBDs >>=
-    Lwt_list.iter_p (fun self -> on_self ctx self op)
+      Lwt_list.iter_p (fun self -> on_self ctx self op)
+
+  let get_all ~rpc ~session_id =
+    SR.get_all_records_where ~rpc ~session_id ~expr:{|field "type" = "gfs2"|} >>= fun srs ->
+    Lwt.return (List.rev_map fst srs)
 
   let vdi () = debug (fun m -> m "Skipping operation: tested on the VDI object directly")
 
@@ -159,6 +193,7 @@ module SR_test = struct
        rpc ctx @@ SR.update ~sr
     | `vdi_clone -> vdi ()
     | `vdi_create ->
+       rpc ctx @@ VDI.create ~name_label ~name_description ~sR:sr ~virtual_size:65536L ~_type:`user ~sharable:true ~read_only:false ~other_config:[] ~xenstore_data:[] ~sm_config:[] ~tags >>= fun _ ->
        rpc ctx @@ VDI.create ~name_label ~name_description ~sR:sr ~virtual_size:65536L ~_type:`user ~sharable:true ~read_only:false ~other_config:[] ~xenstore_data:[] ~sm_config:[] ~tags >>= fun _ -> Lwt.return_unit
     | `vdi_data_destroy -> vdi ()
     | `vdi_destroy -> vdi ()
@@ -182,7 +217,15 @@ end
 module VDI_test = struct
   type t = API.ref_VDI
   type operation = API.vdi_operations
+  let rpc_of_operation = API.rpc_of_vdi_operations
   include VDI
+
+  let get_all ~rpc ~session_id =
+    SR_test.get_all ~rpc ~session_id >>=
+    Lwt_list.map_p (fun sr ->
+        let expr = Printf.sprintf {|field "SR" = "%s"|} (Ref.string_of sr) in
+        VDI.get_all_records_where ~rpc ~session_id ~expr) >>= fun vdis ->
+    Lwt.return (vdis |> List.flatten |> List.rev_map fst)
 
   let name = "VDI"
   let perform ctx self (op:operation) = match op with
@@ -190,7 +233,7 @@ module VDI_test = struct
     | `data_destroy ->
        on_self ctx self VDI.data_destroy
     | `destroy ->
-       on_self ctx self VDI.destroy
+       on_self ctx self VDI.destroy (* ISOSR fails with cannot mark as hidden *)
     | `disable_cbt ->
        on_self ctx self VDI.disable_cbt
     | `enable_cbt ->
@@ -199,7 +242,7 @@ module VDI_test = struct
        on_self ctx self @@ VDI.set_on_boot ~value:`reset
     | `snapshot ->
        rpc ctx @@ VDI.snapshot ~driver_params:[] ~vdi:self >>= fun _ -> Lwt.return_unit
-    | `resize ->
+    | `resize -> (* sharable VDI cannot be resized *)
        on_self ctx self VDI.get_virtual_size >>= fun size ->
        rpc ctx @@ VDI.resize ~vdi:self ~size:(Int64.add size 65536L)
     | `resize_online ->
@@ -212,8 +255,7 @@ module VDI_test = struct
     | `list_changed_blocks -> todo "CBT"
     | `blocked -> todo "??"
     | `generate_config -> todo "VDI.generate_config"
-    | `force_unlock ->
-       rpc ctx @@ VDI.force_unlock ~vdi:self
+    | `force_unlock -> todo "FIXME: doesn't work, MESSAGE_DEPRECATED, why is this part of allowed-ops?"
     | `update ->
        rpc ctx @@ VDI.update ~vdi:self
 end
@@ -221,10 +263,17 @@ end
 module Host_test = struct
   type t = API.ref_host
   type operation = [API.host_allowed_operations | `disable ]
+  let rpc_of_operation = function
+    | `disable -> Rpc.String "disable"
+    | #API.host_allowed_operations as op -> API.rpc_of_host_allowed_operations op
   include Host
 
   let name = "Host"
   let vm () = debug (fun m -> m "Tested as part of VM ops")
+
+  let get_allowed_operations ~rpc ~session_id ~self =
+    get_allowed_operations ~rpc ~session_id ~self >>= fun ops ->
+    Lwt.return (ops @ [`disable])
 
   let perform ctx host = function
     | `evacuate ->

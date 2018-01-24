@@ -38,6 +38,7 @@ let sync t =
       rpc ctx Pool.sync_database)
 
 let main () =
+  Fmt_tty.setup_std_outputs ~style_renderer:`Ansi_tty ~utf_8:true ();
   let ips = OS.Arg.(parse ~pos:ip ()) in
   with_physical (fun phys ->
       Logs.debug (fun m -> m "rollback: %b" rollback);
@@ -55,22 +56,19 @@ let main () =
   
   License.maybe_apply_license_pool t ?license_server ~license_server_port ~edition [Features.HA; Features.Corosync] >>= fun () ->
 
-  Allowed_ops.T1.execute t
-
- (* Test_sr.enable_clustering t >>= fun cluster ->
-  match iscsi, iqn with
+  Test_sr.enable_clustering t >>= fun cluster ->
+  (match iscsi, iqn with
   | Some iscsi, Some iqn ->
      Test_sr.get_gfs2_sr t ~iscsi ~iqn ?scsiid () >>= fun gfs2 ->
-     (*         Test_sr.plug_pbds ctx gfs2 >>= fun () ->
-         Test_sr.unplug_pbds ctx gfs2 >>= fun () ->
-         Test_sr.plug_pbds ctx gfs2 >>= fun () ->
-         Test_sr.unplug_pbds ctx gfs2 >>= fun () ->*)
-     (*Test_sr.do_ha ctx gfs2 >>= fun () ->
-         Test_sr.undo_ha ctx >>= fun () ->*)
-     Test_sr.pool_reboot t >>= fun () ->
      Lwt.return_unit
   | _ ->
-     Lwt.return_unit*)
+     Lwt.return_unit) >>= fun () ->
+  Allowed_ops.T1.execute t >>= fun () ->
+  Allowed_ops.T2.execute t >>= fun () ->
+  Allowed_ops.T3.execute t >>= fun () ->
+  Allowed_ops.T4.execute t >>= fun () ->
+  Allowed_ops.T5.execute t >>= fun () ->
+  Allowed_ops.T6.execute t
 
 (*  with_default_session (fun ~context ->
       find_templates ~context ~name:"XenServer" >>= fun lst ->

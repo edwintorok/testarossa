@@ -127,7 +127,7 @@ let step t description f =
   retry 0
 
 
-let with_login ?(max_expiration_retry= 3) ?(timeout= 60.0) ~uname ~pwd master f =
+let with_login ?(timeout= 60.0) ~uname ~pwd master f =
   let open Lwt.Infix in
   let mrpc = make ~timeout ("https://" ^ master) |> wrap_rpc master in
   let login () =

@@ -17,6 +17,8 @@ let enable_clustering t =
     | [cluster] ->
         debug (fun m -> m "Found cluster")
         >>= fun () ->
+        rpc ctx @@ Cluster.pool_resync ~self:cluster
+        >>= fun () ->
         rpc ctx Cluster_host.get_all
         >>= Lwt_list.iter_p (fun self ->
                 rpc ctx @@ Cluster_host.get_enabled ~self
@@ -272,24 +274,20 @@ let choose_master masters =
       None
 
 
-let rec wait_enabled ctx () =
-  debug (fun m -> m "Waiting for all hosts to be enabled in the pool")
-  >>= fun () ->
-  rpc ctx Host.get_all_records
-  >>= fun hrecs ->
-  if List.exists
-       (fun (_, r) ->
-         match r.API.host_enabled with
-         | true ->
-             false
-         | false ->
-             Logs.debug (fun m ->
-                 m "Host %s(%s) is not enabled" r.API.host_name_label
-                   r.API.host_address ) ;
-             true )
-       hrecs
-  then Lwt_unix.sleep 0.3 >>= wait_enabled ctx
-  else Lwt.return_unit
+let wait_enabled ctx () =
+  rpc ctx Host.get_all_records >>= fun hrecs ->
+  debug (fun m -> m "Waiting for all hosts to be enabled in the pool") >>=
+    let rec loop () =
+      Lwt_list.exists_p (fun (host, hr) ->
+          rpc ctx @@  Host.get_enabled ~self:host >>= function
+          | true -> Lwt.return_false
+          | false ->
+             Logs.debug (fun m -> m "Host %s(%s) is not enabled" hr.API.host_name_label hr.API.host_address ) ;
+             Lwt.return_true ) hrecs >>= function
+      | true -> Lwt_unix.sleep 0.3 >>= loop
+      | false -> Lwt.return_unit
+    in
+    loop
 
 
 let fix_management_interfaces ctx =

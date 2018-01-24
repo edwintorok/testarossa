@@ -2,4 +2,5 @@
 (library
  ((name testarossa)
   (public_name testarossa)
+  (preprocess (pps (ppx_deriving_rpc)))
   (libraries (ezjsonm ezxmlm ipaddr astring logs fmt xen-api-client-lwt bos logs.lwt))))

@@ -12,7 +12,7 @@ let list_vms ctx =
 let ensure_pool_snapshot t =
   step t "ensure pool has snapshot" @@ fun ctx ->
       list_vms ctx >>= fun vms ->
-      Lwt_list.for_all_p (fun (vm, vmr) ->
+      Lwt_list.for_all_p (fun (_vm, vmr) ->
           debug (fun m -> m "Checking snapshots for VM %s" vmr.API.vM_name_label) >>= fun () ->
           Lwt_list.exists_p (is_ours ctx) vmr.API.vM_snapshots) vms >>= function
       | true ->

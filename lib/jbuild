@@ -1,6 +1,16 @@
 (jbuild_version 1)
 (library
  ((name testarossa)
+  (flags (:standard -safe-string))
   (public_name testarossa)
   (preprocess (pps (ppx_deriving_rpc)))
-  (libraries (ezjsonm ezxmlm ipaddr astring logs fmt xen-api-client-lwt bos logs.lwt))))
+  (libraries (alcotest-lwt
+              astring
+              bos
+              ezjsonm
+              ezxmlm
+              fmt
+              ipaddr
+              logs
+              logs.lwt
+              xen-api-client-lwt))))

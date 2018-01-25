@@ -56,10 +56,10 @@ let main () =
   
   License.maybe_apply_license_pool t ?license_server ~license_server_port ~edition [Features.HA; Features.Corosync] >>= fun () ->
 
-  Test_sr.enable_clustering t >>= fun cluster ->
+  Test_sr.enable_clustering t >>= fun _cluster ->
   (match iscsi, iqn with
   | Some iscsi, Some iqn ->
-     Test_sr.get_gfs2_sr t ~iscsi ~iqn ?scsiid () >>= fun gfs2 ->
+     Test_sr.get_gfs2_sr t ~iscsi ~iqn ?scsiid () >>= fun _gfs2 ->
      Lwt.return_unit
   | _ ->
      Lwt.return_unit) >>= fun () ->

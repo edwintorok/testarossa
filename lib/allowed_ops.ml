@@ -1,5 +1,5 @@
 open Xen_api_lwt_unix
-open Context       
+open Context
 
 type 'a api = rpc:rpc -> session_id:API.ref_session -> 'a
 
@@ -12,7 +12,7 @@ module type BEHAVIOUR = sig
   type operation
   val rpc_of_operation : operation -> Rpc.t
   val name : string
-  val get_uuid : (self : t -> string Lwt.t) api               
+  val get_uuid : (self : t -> string Lwt.t) api
   val get_allowed_operations : (self: t -> operation list Lwt.t) api
   val get_all : t list Lwt.t api
   val perform : Context.session -> t -> operation -> unit Lwt.t
@@ -118,15 +118,15 @@ module Pool_test = struct
   type t = API.ref_pool
   type operation = API.pool_allowed_operations
   let rpc_of_operation = API.rpc_of_pool_allowed_operations
-  
+
   include Pool
-  let contains ctx self =
+  let contains ctx _self =
     (* there is only pool for now *)
     rpc ctx Host.get_all
 
   let name = "Pool"
 
-  let perform ctx self = function
+  let perform ctx _self = function
     | `cluster_create ->
        (get_management_pifs ctx
        >>= function
@@ -159,7 +159,7 @@ module SR_test = struct
   type t = [`SR] Ref.t
   type operation = [`destroy | `forget | `pbd_create | `pbd_destroy | `plug | `scan | `unplug | `update | `vdi_clone | `vdi_create | `vdi_data_destroy | `vdi_destroy | `vdi_disable_cbt | `vdi_enable_cbt | `vdi_introduce | `vdi_list_changed_blocks | `vdi_mirror | `vdi_resize | `vdi_set_on_boot | `vdi_snapshot ]
 
-  let rpc_of_operation _ = Rpc.String "TODO"                     
+  let rpc_of_operation _ = Rpc.String "TODO"
 
   include SR
   let name = "SR"

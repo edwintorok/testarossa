@@ -97,7 +97,7 @@ let probe ctx ~iscsi ~iqn host =
 
 
 let create_gfs2_sr ctx ~iscsi ~iqn ?scsiid () =
-  get_pool_master ctx >>= fun (pool, master) ->
+  get_pool_master ctx >>= fun (_pool, master) ->
   ( match scsiid with
   | None ->
       probe ctx ~iscsi ~iqn master
@@ -129,22 +129,6 @@ let plug_pbds ctx ~sr =
     pbds
 
 
-let unplug_pbds ctx ~sr =
-  rpc ctx @@ SR.get_PBDs ~self:sr
-  >>= fun pbds ->
-  (* no parallel unplug support yet in XAPI *)
-  Lwt_list.iter_p
-    (fun pbd ->
-      rpc ctx @@ PBD.get_currently_attached ~self:pbd
-      >>= function
-        | false ->
-            Lwt.return_unit
-        | true ->
-            Logs.debug (fun m -> m "PBD unplug") ;
-            rpc ctx @@ PBD.unplug ~self:pbd )
-    pbds
-
-
 let get_gfs2_sr t ~iscsi ~iqn ?scsiid () =
   step t "GFS2 SR" @@ fun ctx ->
   debug (fun m -> m "Looking for GFS2 SR")
@@ -160,7 +144,7 @@ let get_gfs2_sr t ~iscsi ~iqn ?scsiid () =
 
 let do_ha t sr =
   step t "Enable HA" @@ fun ctx ->
-  get_pool_master ctx >>= fun (pool, master) ->
+  get_pool_master ctx >>= fun (pool, _master) ->
   rpc ctx @@ Pool.get_ha_enabled ~self:pool
   >>= function
     | true ->
@@ -173,7 +157,7 @@ let do_ha t sr =
 
 let undo_ha t =
   step t "Disable HA" @@ fun ctx ->
-  get_pool_master ctx >>= fun (pool, master) ->
+  get_pool_master ctx >>= fun (pool, _master) ->
   rpc ctx @@ Pool.get_ha_enabled ~self:pool
   >>= function
     | false ->
@@ -216,7 +200,7 @@ let rec repeat n f =
 
 let pool_reboot t =
   step t "Reboot pool" @@ fun ctx ->
-  get_pool_master ctx >>= fun (pool, master) ->
+  get_pool_master ctx >>= fun (_pool, master) ->
   rpc ctx Host.get_all_records
   >>= fun hosts ->
   rpc ctx @@ Host.get_uuid ~self:master
@@ -293,7 +277,7 @@ let wait_enabled ctx () =
 let fix_management_interfaces ctx =
   (* enabling HA will fail with "Not_found" if the host address IP doesn't match the IP used to join the servers,
      i.e. the management interface must be set to the interface containing the master's IP *)
-  get_pool_master ctx >>= fun (pool, master) ->
+  get_pool_master ctx >>= fun (_pool, master) ->
   rpc ctx @@ Host.get_address ~self:master
   >>= fun ip ->
   rpc ctx PIF.get_all_records

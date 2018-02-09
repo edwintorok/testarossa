@@ -4,6 +4,7 @@ open Context
 type 'a api = rpc:rpc -> session_id:API.ref_session -> 'a
 
 module type S = sig
+  val name : string
   val execute: Context.t -> unit Lwt.t
 end
 
@@ -22,6 +23,7 @@ let on_self ctx self op =
   rpc ctx (fun ~rpc ~session_id -> op ~rpc ~session_id ~self)
 
 module Make(B: BEHAVIOUR) : S = struct
+  let name = B.name
   let pp_operation =
     Fmt.using B.rpc_of_operation PP.rpc_t
 
@@ -292,11 +294,13 @@ module Host_test = struct
     | `vm_start -> vm ()
 end
 
-module T1 = Make(Cluster_host_test)
-module T2 = Make(Cluster_test)
-module T3 = Make(Pool_test)
-module T4 = Make(SR_test)
-module T5 = Make(VDI_test)
-module T6 = Make(Host_test)
+let tests = [
+    (module Make(Cluster_host_test) : S);
+    (module Make(Cluster_test) : S);
+    (module Make(Pool_test) : S);
+    (module Make(SR_test) : S);
+    (module Make(VDI_test) : S);
+    (module Make(Host_test) : S)
+  ]
 
 (*  TODO: vm tests based on mirage test vm *)

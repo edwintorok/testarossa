@@ -1,5 +1,6 @@
 open Xen_api_lwt_unix
 open Context
+open Cmd_types       
 
 type t = {server: string; edition: string; port: int}
 
@@ -24,26 +25,26 @@ let check_features t required self =
     >>= fun () -> Lwt.return_false
 
 
-let maybe_license_host ctx ?license_server ?license_server_port ~edition self =
+let maybe_license_host ctx conf self =
   rpc ctx @@ Host.get_edition ~self
   >>= fun existing_edition ->
-  if existing_edition = edition then
+  if existing_edition = conf.license_edition then
     debug (fun m ->
         get_host_pp ctx self
-        >>= fun h -> m "Host %a is already using edition %s" PP.host h edition
+        >>= fun h -> m "Host %a is already using edition %s" PP.host h conf.license_edition
     )
   else
     debug (fun m ->
         get_host_pp ctx self
         >>= fun h -> m "Configuring license server on %a" PP.host h )
     >>= fun () ->
-    ( match (license_server, license_server_port) with
-    | Some license_server, Some license_server_port ->
+    ( match conf.license_server with
+    | Some license_server ->
         rpc ctx @@ Host.remove_from_license_server ~self ~key:"port"
         >>= fun () ->
         rpc ctx
         @@ Host.add_to_license_server ~self ~key:"port"
-             ~value:(string_of_int license_server_port)
+             ~value:(string_of_int conf.license_server_port)
         >>= fun () ->
         rpc ctx @@ Host.remove_from_license_server ~self ~key:"address"
         >>= fun () ->
@@ -55,17 +56,16 @@ let maybe_license_host ctx ?license_server ?license_server_port ~edition self =
     >>= fun () ->
     debug (fun m ->
         get_host_pp ctx self
-        >>= fun h -> m "Applying edition %s on %a" edition PP.host h )
-    >>= fun () -> rpc ctx @@ Host.apply_edition ~host:self ~edition ~force:true
+        >>= fun h -> m "Applying edition %s on %a" conf.license_edition PP.host h )
+    >>= fun () -> rpc ctx @@ Host.apply_edition ~host:self ~edition:conf.license_edition ~force:true
 
 
-let maybe_apply_license_pool t ?license_server ?license_server_port ~edition
-    required =
+let maybe_apply_license_pool t conf required =
   step t "Applying license to pool"
   @@ fun ctx ->
   get_pool_master ctx
   >>= fun (pool, master) ->
-  maybe_license_host ctx ?license_server ?license_server_port ~edition master
+  maybe_license_host ctx conf master
   >>= fun () ->
   rpc ctx @@ Host.get_all >>= Lwt_list.for_all_p (check_features ctx required)
   >>= function
@@ -90,12 +90,12 @@ let maybe_apply_license_pool t ?license_server ?license_server_port ~edition
             >>= fun () ->
             rpc ctx @@ Host.set_license_server ~self:host ~value:master_server
             >>= fun () ->
-            rpc ctx @@ Host.apply_edition ~host ~edition ~force:true )
+            rpc ctx @@ Host.apply_edition ~host ~edition:conf.license_edition ~force:true )
           hosts
         >>= fun () ->
         debug (fun m -> m "Applying edition on the pool")
         >>= fun () ->
-        rpc ctx @@ Pool.apply_edition ~self:pool ~edition
+        rpc ctx @@ Pool.apply_edition ~self:pool ~edition:conf.license_edition
         >>= fun () ->
         Lwt_list.for_all_p (check_features ctx required) hosts
         >>= function
@@ -103,10 +103,10 @@ let maybe_apply_license_pool t ?license_server ?license_server_port ~edition
               debug (fun m ->
                   m
                     "All required features are present after applying edition %s"
-                    edition )
+                    conf.license_edition )
           | false ->
               err (fun m ->
                   m "Features are missing even after applying edition %s"
-                    edition )
+                    conf.license_edition )
               >>= fun () ->
               Lwt.fail_with "Features are missing (check license)"

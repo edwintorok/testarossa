@@ -36,7 +36,7 @@ let setup style_renderer level =
   Fmt_tty.setup_std_outputs ?style_renderer ();
   Logs.set_level level;
   Logs.set_reporter (Logs_fmt.reporter ~pp_header ());
-  Logs.debug (fun m -> m ~header:"x" "Initialized")
+  Context.debug (fun m -> m ~header:"x" "Initialized")
 
 open Cmdliner
 
@@ -76,14 +76,14 @@ let () =
       Lwt_list.iter_p (make_xenserver_template ~context) vms >>= fun () ->
       find_vm ~context ~name:Sys.argv.(1) >>= fun vms ->
 
-      Logs.debug (fun m -> m "IPs: %a" Fmt.(Dump.list Ipaddr.V4.pp_hum) ips);
+      Context.debug (fun m -> m "IPs: %a" Fmt.(Dump.list Ipaddr.V4.pp_hum) ips);
       make_pool ~context ?license_server ~license_server_port ips >>= fun master ->
       with_pool ~context master (fun ~context ->
           enable_clustering ~context >>= fun cluster ->
           match iscsi, iqn with
           | Some iscsi, Some iqn ->
             get_gfs2_sr ~context ~iscsi ~iqn >>= fun gfs2 ->
-            Logs.debug (fun m -> m "got SR");
+            Context.debug (fun m -> m "got SR");
             (*repeat 100 (fun () ->
                 unplug_pbds ~context ~sr:gfs2 >>= fun () ->
                 plug_pbds ~context ~sr:gfs2)*)

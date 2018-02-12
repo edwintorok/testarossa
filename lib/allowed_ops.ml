@@ -34,22 +34,22 @@ module Make(B: BEHAVIOUR) : S = struct
       Lwt.catch (fun () ->
         on_self ctx self B.get_uuid >>= fun uuid ->
         on_self ctx self B.get_allowed_operations >>= fun ops ->
-        debug (fun m -> m "Available operations on %s: %a" uuid
-                          Fmt.(list pp_operation) ops) >>= fun () ->
+        debug (fun m -> m "Available operations on %s: %a" uuid Fmt.(list pp_operation) ops);
         match List.find_all (fun e -> not (Hashtbl.mem seen e)) ops with
         | [] -> Lwt.return_unit
         | op :: _ ->
            Hashtbl.add seen op ();
-           debug (fun m -> m "Performing %a on %s" pp_operation op uuid) >>= fun () ->
+           debug (fun m -> m "Performing %a on %s" pp_operation op uuid);
            Lwt.catch (fun () ->
                B.perform ctx self op)
              (function
               | Api_errors.Server_error(code, ((msg :: _) as lst))
                    when code = Api_errors.sr_backend_failure && msg = "NotImplementedError" ->
-                 warn (fun m -> m "Operation %a is not implemented: %a!" pp_operation op Fmt.(list string) lst) >>= fun () ->
+                 warn (fun m -> m "Operation %a is not implemented: %a!" pp_operation op Fmt.(list string) lst);
                  Lwt.return_unit
               | e ->
-                 err (fun m -> m "Operation %a failed: %a" pp_operation op Fmt.exn e)
+                 err (fun m -> m "Operation %a failed: %a" pp_operation op Fmt.exn e);
+                 Lwt.return_unit
              (* and keep going *)
              ) >>= fun () ->
            perform_allowed self
@@ -60,10 +60,10 @@ module Make(B: BEHAVIOUR) : S = struct
           | e -> Lwt.fail e)
     in
     rpc ctx B.get_all >>= fun all ->
-    debug (fun m -> m "Performing operations serially") >>= fun () ->
+    debug (fun m -> m "Performing operations serially");
     Lwt_list.iter_s perform_allowed all >>= fun () ->
     rpc ctx B.get_all >>= fun all ->
-    debug (fun m -> m "Performing operations in parallel") >>= fun () ->
+    debug (fun m -> m "Performing operations in parallel");
     Lwt_list.iter_p perform_allowed all
 end
 
@@ -85,7 +85,7 @@ module Cluster_host_test = struct
 end
 
 let todo msg =
-  info (fun m -> m "TODO: %s" msg)
+  info (fun m -> m "TODO: %s" msg); Lwt.return_unit
 
 let get_management_pifs ctx =
   rpc ctx PIF.get_all
@@ -106,7 +106,8 @@ module Cluster_test = struct
     contains ctx self >>= function
     | child :: _ -> on_self ctx child op
     | [] ->
-       debug (fun m -> m "no child objects: nothing to do")
+       debug (fun m -> m "no child objects: nothing to do");
+       Lwt.return_unit
 
   let perform ctx self = function
     | `destroy -> on_self ctx self Cluster.destroy
@@ -135,8 +136,7 @@ module Pool_test = struct
        | [] ->
           Lwt.fail_with "No management interface found"
        | pif :: _ as pifs ->
-          debug (fun m -> m "Setting disallow unplug")
-          >>= fun () ->
+          debug (fun m -> m "Setting disallow unplug");
           Lwt_list.iter_p
             (fun self ->
               rpc ctx @@ PIF.set_disallow_unplug ~self ~value:true )
@@ -145,7 +145,8 @@ module Pool_test = struct
           rpc ctx @@ PIF.get_network ~self:pif
           >>= fun network ->
           rpc ctx @@ Cluster.pool_create ~network ~cluster_stack:"corosync" ~token_timeout:20.0 ~token_timeout_coefficient:1.0 >>= fun _ ->
-          info (fun m -> m "Created cluster")
+          info (fun m -> m "Created cluster");
+          Lwt.return_unit
        )
     | `ha_disable ->
        rpc ctx @@ Pool.disable_ha 
@@ -159,9 +160,7 @@ let tags = ["tag for " ^ name_label; "tagg"]
 
 module SR_test = struct
   type t = [`SR] Ref.t
-  type operation = [`destroy | `forget | `pbd_create | `pbd_destroy | `plug | `scan | `unplug | `update | `vdi_clone | `vdi_create | `vdi_data_destroy | `vdi_destroy | `vdi_disable_cbt | `vdi_enable_cbt | `vdi_introduce | `vdi_list_changed_blocks | `vdi_mirror | `vdi_resize | `vdi_set_on_boot | `vdi_snapshot ]
-
-  let rpc_of_operation _ = Rpc.String "TODO"
+  type operation = [`destroy | `forget | `pbd_create | `pbd_destroy | `plug | `scan | `unplug | `update | `vdi_clone | `vdi_create | `vdi_data_destroy | `vdi_destroy | `vdi_disable_cbt | `vdi_enable_cbt | `vdi_introduce | `vdi_list_changed_blocks | `vdi_mirror | `vdi_resize | `vdi_set_on_boot | `vdi_snapshot ] [@@deriving rpc]
 
   include SR
   let name = "SR"
@@ -174,7 +173,7 @@ module SR_test = struct
     SR.get_all_records_where ~rpc ~session_id ~expr:{|field "type" = "gfs2"|} >>= fun srs ->
     Lwt.return (List.rev_map fst srs)
 
-  let vdi () = debug (fun m -> m "Skipping operation: tested on the VDI object directly")
+  let vdi () = debug (fun m -> m "Skipping operation: tested on the VDI object directly"); Lwt.return_unit
 
   (* this should check the allowed ops of the child as well! *)                    
   let perform ctx sr (op: operation) = match op with
@@ -182,8 +181,7 @@ module SR_test = struct
        rpc ctx @@ SR.destroy ~sr
     | `forget ->
        rpc ctx @@ SR.forget ~sr
-    | `pbd_create ->
-       todo "PBD.create"
+    | `pbd_create -> todo "PBD.create"
     | `pbd_destroy -> todo "PBD.destroy"
     | `plug ->
        on_pbds ctx sr PBD.plug
@@ -271,7 +269,7 @@ module Host_test = struct
   include Host
 
   let name = "Host"
-  let vm () = debug (fun m -> m "Tested as part of VM ops")
+  let vm () = debug (fun m -> m "Tested as part of VM ops"); Lwt.return_unit
 
   let get_allowed_operations ~rpc ~session_id ~self =
     get_allowed_operations ~rpc ~session_id ~self >>= fun ops ->

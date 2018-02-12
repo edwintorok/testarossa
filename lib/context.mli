@@ -13,7 +13,7 @@ val step : t -> string -> (session -> 'a Lwt.t) -> 'a Lwt.t
 val rpc :
   session -> (rpc:rpc -> session_id:API.ref_session -> 'a Lwt.t) -> 'a Lwt.t
 
-type 'a log = 'a Logs_lwt.log
+type 'a log = 'a Logs.log
 
 val debug : 'a log
 

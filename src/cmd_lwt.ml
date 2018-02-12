@@ -9,7 +9,7 @@ open Lwt.Infix
 let handle_rollback t ~rollback =
   match t.physical with
   | Some host ->
-     Context.debug (fun m -> m "Logging in to physical host %s" host) >>= fun () ->
+     Context.debug (fun m -> m "Logging in to physical host %s" host);
      Context.with_login ~uname:t.uname ~pwd:t.pwd host (fun phys ->
          if rollback then
            Rollback.rollback_pool phys

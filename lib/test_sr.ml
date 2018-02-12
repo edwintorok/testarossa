@@ -8,15 +8,13 @@ let get_management_pifs ctx =
 
 let enable_clustering t =
   step t "Enable clustering" @@ fun ctx ->
-  debug (fun m -> m "Checking for existing cluster on pool")
-  >>= fun () ->
+  debug (fun m -> m "Checking for existing cluster on pool");
   rpc ctx Cluster.get_all
   >>= function
     | _ :: _ :: _ ->
         Lwt.fail_with "Too many clusters"
     | [cluster] ->
-        debug (fun m -> m "Found cluster")
-        >>= fun () ->
+        debug (fun m -> m "Found cluster");
         rpc ctx @@ Cluster.pool_resync ~self:cluster
         >>= fun () ->
         rpc ctx Cluster_host.get_all
@@ -24,21 +22,20 @@ let enable_clustering t =
                 rpc ctx @@ Cluster_host.get_enabled ~self
                 >>= function
                   | false ->
-                      debug (fun m -> m "Enabling cluster host")
-                      >>= fun () -> rpc ctx @@ Cluster_host.enable ~self
+                      debug (fun m -> m "Enabling cluster host");
+                      rpc ctx @@ Cluster_host.enable ~self
                   | true ->
                       Lwt.return_unit )
         >>= fun () ->
-        debug (fun m -> m "All cluster hosts are enabled")
-        >>= fun () -> Lwt.return cluster
+        debug (fun m -> m "All cluster hosts are enabled");
+        Lwt.return cluster
     | [] ->
         get_management_pifs ctx
         >>= function
           | [] ->
               Lwt.fail_with "No management interface found"
           | pif :: _ as pifs ->
-              debug (fun m -> m "Setting disallow unplug")
-              >>= fun () ->
+              debug (fun m -> m "Setting disallow unplug");
               Lwt_list.iter_p
                 (fun self ->
                   rpc ctx @@ PIF.set_disallow_unplug ~self ~value:true )
@@ -46,8 +43,7 @@ let enable_clustering t =
               >>= fun () ->
               rpc ctx @@ PIF.get_network ~self:pif
               >>= fun network ->
-              debug (fun m -> m "Creating cluster on pool")
-              >>= fun () ->
+              debug (fun m -> m "Creating cluster on pool");
               rpc ctx
               @@ Cluster.pool_create ~network ~cluster_stack:"corosync"
                    ~token_timeout:20.0 ~token_timeout_coefficient:1.0
@@ -69,8 +65,7 @@ let probe ctx ~iscsi ~iqn host =
   (* probe as if it was an iSCSI SR, since we don't have probe for GFS2 yet *)
   Lwt.catch
     (fun () ->
-      debug (fun m -> m "Probing %a" Ipaddr.V4.pp_hum iscsi)
-      >>= fun () ->
+      debug (fun m -> m "Probing %a" Ipaddr.V4.pp_hum iscsi);
       rpc ctx
       @@ SR.probe ~host
            ~device_config:
@@ -85,15 +80,14 @@ let probe ctx ~iscsi ~iqn host =
           Lwt.fail_with "<bad xml>" )
   >>= fun xml ->
   let open Ezxmlm in
-  debug (fun m -> m "Got probe XML: %s" xml)
-  >>= fun () ->
+  debug (fun m -> m "Got probe XML: %s" xml);
   let _, xmlm = from_string xml in
   let scsiid =
     xmlm |> member "iscsi-target" |> member "LUN" |> member "SCSIid"
     |> data_to_string
   in
-  debug (fun m -> m "SR Probed: SCSIid=%s\n%!" scsiid)
-  >>= fun () -> Lwt.return scsiid
+  debug (fun m -> m "SR Probed: SCSIid=%s\n%!" scsiid);
+  Lwt.return scsiid
 
 
 let create_gfs2_sr ctx ~iscsi ~iqn ?scsiid () =
@@ -105,8 +99,7 @@ let create_gfs2_sr ctx ~iscsi ~iqn ?scsiid () =
       Lwt.return scsiid )
   >>= fun scsiid ->
   let device_config = device_config ~ip:iscsi ~iqn ~scsiid () in
-  debug (fun m -> m "Creating SR, device_config: %a" PP.dict device_config)
-  >>= fun () ->
+  debug (fun m -> m "Creating SR, device_config: %a" PP.dict device_config);
   rpc ctx
   @@ SR.create ~host:master ~device_config ~physical_size:0L
        ~name_label:"gfs2-sr" ~name_description:"" ~_type:"gfs2"
@@ -124,20 +117,19 @@ let plug_pbds ctx ~sr =
         | true ->
             Lwt.return_unit
         | false ->
-            Logs.debug (fun m -> m "PBD plug") ;
+            debug (fun m -> m "PBD plug") ;
             rpc ctx @@ PBD.plug ~self:pbd )
     pbds
 
 
 let get_gfs2_sr t ~iscsi ~iqn ?scsiid () =
   step t "GFS2 SR" @@ fun ctx ->
-  debug (fun m -> m "Looking for GFS2 SR")
-  >>= fun () ->
+  debug (fun m -> m "Looking for GFS2 SR");
   rpc ctx @@ SR.get_all_records_where ~expr:{|field "type" = "gfs2"|}
   >>= function
     | (sr, _) :: _ ->
-        debug (fun m -> m "Found existing GFS2 SR")
-        >>= fun () -> plug_pbds ctx ~sr >>= fun () -> Lwt.return sr
+        debug (fun m -> m "Found existing GFS2 SR");
+        plug_pbds ctx ~sr >>= fun () -> Lwt.return sr
     | [] ->
         create_gfs2_sr ctx ~iscsi ~iqn ?scsiid ()
 
@@ -148,12 +140,11 @@ let do_ha t sr =
   rpc ctx @@ Pool.get_ha_enabled ~self:pool
   >>= function
     | true ->
-        debug (fun m -> m "HA is already enabled")
+        debug (fun m -> m "HA is already enabled"); Lwt.return_unit
     | false ->
-        debug (fun m -> m "Enabling HA")
-        >>= fun () ->
+        debug (fun m -> m "Enabling HA");
         rpc ctx @@ Pool.enable_ha ~heartbeat_srs:[sr] ~configuration:[]
-        >>= fun () -> debug (fun m -> m "HA enabled")
+        >>= fun () -> debug (fun m -> m "HA enabled"); Lwt.return_unit
 
 let undo_ha t =
   step t "Disable HA" @@ fun ctx ->
@@ -161,11 +152,11 @@ let undo_ha t =
   rpc ctx @@ Pool.get_ha_enabled ~self:pool
   >>= function
     | false ->
-        debug (fun m -> m "HA is already disabled")
+       debug (fun m -> m "HA is already disabled");
+       Lwt.return_unit
     | true ->
-        debug (fun m -> m "Disabling HA")
-        >>= fun () ->
-        rpc ctx Pool.disable_ha >>= fun () -> debug (fun m -> m "HA disabled")
+        debug (fun m -> m "Disabling HA");
+        rpc ctx Pool.disable_ha >>= fun () -> debug (fun m -> m "HA disabled"); Lwt.return_unit
 
 
 let unplug_pbds ctx ~sr =
@@ -173,7 +164,7 @@ let unplug_pbds ctx ~sr =
   >>= fun pbds ->
   Lwt_list.iter_p
     (fun pbd ->
-      Logs.debug (fun m -> m "PBD unplug") ;
+      debug (fun m -> m "PBD unplug") ;
       rpc ctx @@ PBD.unplug ~self:pbd )
     pbds
 
@@ -183,7 +174,7 @@ let plug_pbds ctx ~sr =
   >>= fun pbds ->
   Lwt_list.iter_p
     (fun pbd ->
-      Logs.debug (fun m -> m "PBD plug") ;
+      debug (fun m -> m "PBD plug") ;
       rpc ctx @@ PBD.plug ~self:pbd )
     pbds
 
@@ -191,7 +182,8 @@ let plug_pbds ctx ~sr =
 let detach_sr ctx ~sr =
   unplug_pbds ctx ~sr
   >>= fun () ->
-  debug (fun m -> m "Forgetting SR") >>= fun () -> rpc ctx @@ SR.forget ~sr
+  debug (fun m -> m "Forgetting SR");
+  rpc ctx @@ SR.forget ~sr
 
 
 let rec repeat n f =
@@ -209,25 +201,26 @@ let pool_reboot t =
   |> Lwt_list.iter_p (fun (host, hostr) ->
          rpc ctx @@ Host.disable ~host
          >>= fun () ->
-         debug (fun m -> m "Rebooting host %s" hostr.API.host_name_label)
-         >>= fun () ->
+         debug (fun m -> m "Rebooting host %s" hostr.API.host_name_label);
          rpc ctx @@ Host.reboot ~host
          >>= fun () ->
-         debug (fun m -> m "Rebooted host %s" hostr.API.host_name_label) )
+         debug (fun m -> m "Rebooted host %s" hostr.API.host_name_label);
+         Lwt.return_unit)
+
 
 
 let get_master ~uname ~pwd ip =
     Lwt.catch (fun () ->
       with_login ~uname ~pwd (Ipaddr.V4.to_string ip) (fun _ ->
-        debug (fun m -> m "Host %a is a master" Ipaddr.V4.pp_hum ip)
-        >>= fun () -> Lwt.return ip))
+        debug (fun m -> m "Host %a is a master" Ipaddr.V4.pp_hum ip);
+        Lwt.return ip))
     (function
         | Api_errors.Server_error ("HOST_IS_SLAVE", [master]) ->
             let master = Ipaddr.V4.of_string_exn master in
             debug (fun m ->
                 m "Host %a is a slave of %a" Ipaddr.V4.pp_hum ip
-                  Ipaddr.V4.pp_hum master )
-            >>= fun () -> Lwt.return master
+                  Ipaddr.V4.pp_hum master );
+            Lwt.return master
         | e ->
             Lwt.fail e)
 
@@ -260,18 +253,18 @@ let choose_master masters =
 
 let wait_enabled ctx () =
   rpc ctx Host.get_all_records >>= fun hrecs ->
-  debug (fun m -> m "Waiting for all hosts to be enabled in the pool") >>=
-    let rec loop () =
-      Lwt_list.exists_p (fun (host, hr) ->
-          rpc ctx @@  Host.get_enabled ~self:host >>= function
-          | true -> Lwt.return_false
-          | false ->
-             Logs.debug (fun m -> m "Host %s(%s) is not enabled" hr.API.host_name_label hr.API.host_address ) ;
-             Lwt.return_true ) hrecs >>= function
-      | true -> Lwt_unix.sleep 0.3 >>= loop
-      | false -> Lwt.return_unit
-    in
-    loop
+  debug (fun m -> m "Waiting for all hosts to be enabled in the pool");
+  let rec loop () =
+    Lwt_list.exists_p (fun (host, hr) ->
+        rpc ctx @@  Host.get_enabled ~self:host >>= function
+        | true -> Lwt.return_false
+        | false ->
+           debug (fun m -> m "Host %s(%s) is not enabled" hr.API.host_name_label hr.API.host_address ) ;
+           Lwt.return_true ) hrecs >>= function
+    | true -> Lwt_unix.sleep 0.3 >>= loop
+    | false -> Lwt.return_unit
+  in
+  loop ()
 
 
 let fix_management_interfaces ctx =
@@ -282,26 +275,25 @@ let fix_management_interfaces ctx =
   >>= fun ip ->
   rpc ctx PIF.get_all_records
   >>= fun pifs ->
-  debug (fun m -> m "Looking for PIF with IP %s" ip)
-  >>= fun () ->
+  debug (fun m -> m "Looking for PIF with IP %s" ip);
   match
     List.find_all
       (fun (_, pifr) ->
-        Logs.debug (fun m -> m "PIF %a -> %s" PP.pif pifr pifr.API.pIF_IP) ;
+        debug (fun m -> m "PIF %a -> %s" PP.pif pifr pifr.API.pIF_IP) ;
         pifr.API.pIF_IP = ip )
       pifs
   with
   | [(_, pifr)] ->
-      Logs.debug (fun m -> m "Found master PIF %a" PP.pif pifr) ;
+      debug (fun m -> m "Found master PIF %a" PP.pif pifr) ;
       let network = pifr.API.pIF_network in
       pifs |> List.filter (fun (_, pifr) -> pifr.API.pIF_network = network)
       |> Lwt_list.iter_p (fun (pif, pifr) ->
              if not pifr.API.pIF_management then (
-               Logs.debug (fun m ->
+               debug (fun m ->
                    m "PIF %a is not management, reconfiguring" PP.pif pifr ) ;
                rpc ctx @@ Host.management_reconfigure ~pif )
              else (
-               Logs.debug (fun m ->
+               debug (fun m ->
                    m "PIF %a is already management, nothing to do" PP.pif pifr
                ) ;
                Lwt.return_unit ) )
@@ -321,7 +313,7 @@ let make_pool ~uname ~pwd ips =
       let slaves =
         List.filter (fun ip -> Ipaddr.V4.compare ip master <> 0) masters
       in
-      Logs.debug (fun m ->
+      debug (fun m ->
           m "We need to join %a to %a"
             Fmt.(Dump.list Ipaddr.V4.pp_hum)
             slaves Ipaddr.V4.pp_hum master ) ;
@@ -341,5 +333,5 @@ let make_pool ~uname ~pwd ips =
           >>= fun () ->
           debug (fun m ->
               m "All hosts enabled in the pool, master is: %a" Ipaddr.V4.pp_hum
-                master )
-          >>= fun () -> Lwt.return t ))
+                master );
+          Lwt.return t ))

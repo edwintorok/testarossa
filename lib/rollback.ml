@@ -13,30 +13,32 @@ let ensure_pool_snapshot t =
   step t "ensure pool has snapshot" @@ fun ctx ->
       list_vms ctx >>= fun vms ->
       Lwt_list.for_all_p (fun (_vm, vmr) ->
-          debug (fun m -> m "Checking snapshots for VM %s" vmr.API.vM_name_label) >>= fun () ->
+          debug (fun m -> m "Checking snapshots for VM %s" vmr.API.vM_name_label);
           Lwt_list.exists_p (is_ours ctx) vmr.API.vM_snapshots) vms >>= function
       | true ->
-         debug (fun m -> m "VMs all have snapshots, good!")
+         debug (fun m -> m "VMs all have snapshots, good!");
+         Lwt.return_unit
       | false ->
-         debug (fun m -> m "Some VM doesn't have a snapshot, taking snapshot of pool now") >>= fun () ->
+         debug (fun m -> m "Some VM doesn't have a snapshot, taking snapshot of pool now");
          let new_name = Printf.sprintf "testarossa-pool-%f" (Unix.gettimeofday ()) in
-         debug (fun m -> m "New snapshot name: %s" new_name) >>= fun () ->
+         debug (fun m -> m "New snapshot name: %s" new_name);
          Lwt_list.iter_p (fun (vm, _) ->
              rpc ctx @@ VM.snapshot ~vm ~new_name >>= fun _ ->
              Lwt.return_unit
            ) vms >>= fun () ->
-         debug (fun m -> m "Created snapshot(s) %s" new_name)
+         debug (fun m -> m "Created snapshot(s) %s" new_name);
+         Lwt.return_unit
 
 let rollback_pool t =
   step t "rollback pool" @@ fun ctx ->
       list_vms ctx >>= fun vms ->
-      debug (fun m -> m "Got %d VMs" (List.length vms)) >>= fun () ->
+      debug (fun m -> m "Got %d VMs" (List.length vms));
       Lwt_list.iter_p (fun (vm, vmr) ->
           Lwt_list.filter_p (is_ours ctx) vmr.API.vM_snapshots >>= function
           | [] ->
-             warn (fun m -> m "No snapshots")
+             warn (fun m -> m "No snapshots"); Lwt.return_unit
           | snapshot :: _ ->
-             debug (fun m -> m "Reverting %s to snapshot" vmr.API.vM_name_label) >>= fun () -> 
+             debug (fun m -> m "Reverting %s to snapshot" vmr.API.vM_name_label);
              rpc ctx @@ VM.revert ~snapshot >>= fun () ->
-             debug (fun m -> m "Powering on VM %s" vmr.API.vM_name_label) >>= fun () ->
+             debug (fun m -> m "Powering on VM %s" vmr.API.vM_name_label);
              rpc ctx @@ VM.start ~vm ~force:false ~start_paused:false) vms

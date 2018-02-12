@@ -34,10 +34,10 @@ end
 
 let src = Logs.Src.create "testarossa" ~doc:"logs testarossa events"
 
-include ( val (Logs_lwt.src_log src : (module Logs_lwt.LOG))
+include ( val (Logs.src_log src : (module Logs.LOG))
 )
 
-type 'a log = 'a Logs_lwt.log
+type 'a log = 'a Logs.log
 
 let version = "1.1"
 
@@ -105,20 +105,19 @@ let step t description f =
         >>= fun info ->
         Lwt.catch
           (fun () ->
-            debug (fun m -> m "Entering %s" description)
-            >>= fun () ->
+            debug (fun m -> m "Entering %s" description);
             let c = Mtime_clock.counter () in
             Lwt.finalize
               (fun () -> f info)
               (fun () ->
                 let dt = Mtime_clock.count c in
                 debug (fun m ->
-                    m "Finished %s in %a" description Mtime.Span.pp dt ) ) )
+                    m "Finished %s in %a" description Mtime.Span.pp dt );
+                Lwt.return_unit) )
           (function
               | Api_errors.Server_error (code, _)
                 when code = Api_errors.session_invalid ->
-                  debug (fun m -> m "Session is not valid (try #%d)!" n)
-                  >>= fun () ->
+                  debug (fun m -> m "Session is not valid (try #%d)!" n);
                   Singleton.invalidate t info ;
                   retry (n + 1)
               | e ->
@@ -131,8 +130,7 @@ let with_login ?(timeout= 60.0) ~uname ~pwd master f =
   let open Lwt.Infix in
   let mrpc = make ~timeout ("https://" ^ master) |> wrap_rpc master in
   let login () =
-    debug (fun m -> m "Logging in to %s as %s" master uname)
-    >>= fun () ->
+    debug (fun m -> m "Logging in to %s as %s" master uname);
     Session.login_with_password ~rpc:mrpc ~uname ~pwd ~version ~originator
     >>= fun session_id -> Lwt.return (mrpc, session_id)
   in

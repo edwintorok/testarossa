@@ -17,6 +17,7 @@ folders = {
            'scripts' => '/scripts'
            }
 
+Vagrant::DEFAULT_SERVER_URL.replace('https://vagrantcloud.com')
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 # Disable default synced folder
   config.vm.synced_folder ".", "/vagrant", disabled: true
@@ -133,7 +134,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   config.vm.provider "xenserver" do |xs|
     xs.use_himn = true
     xs.memory = 1024
-    xs.xs_host = "gandalf.uk.xensource.com"
+    xs.xs_host = "xrtuk-14-12.xenrt.citrite.net"
     xs.xs_username = "root"
     xs.xs_password = "xenroot"
   end

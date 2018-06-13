@@ -12,15 +12,14 @@ let list_vms ctx =
     ~expr:
       {|field "is_a_snapshot" = "false" and field "is_a_template" = "false" and field "is_control_domain" = "false"|}
   >>= fun vms ->
+  (* do not snapshot the iSCSI target *)
   Lwt.return
   @@ List.filter
     (fun (_, vmr) -> not (List.mem ("auto_poweron", "true") vmr.API.vM_other_config))
     vms
 
 
-let ensure_pool_snapshot t =
-  step t "ensure pool has snapshot"
-  @@ fun ctx ->
+let ensure_pool_snapshot ctx =
   list_vms ctx
   >>= fun vms ->
   Lwt_list.for_all_p

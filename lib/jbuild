@@ -22,7 +22,7 @@ let () = Printf.ksprintf Jbuild_plugin.V1.send {|
 (jbuild_version 1)
 (library
  ((name testarossa)
-  (flags (:standard -safe-string %s))
+  (flags (:standard -safe-string %s -w -23))
   (public_name testarossa)
   (preprocess (pps (ppx_deriving_rpc)))
   (libraries (alcotest-lwt

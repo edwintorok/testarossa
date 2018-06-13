@@ -9,7 +9,8 @@ let handle_rollback t ~rollback =
   | Some host ->
       Context.debug (fun m -> m "Logging in to physical host %s" host) ;
       Context.with_login ~uname:t.uname ~pwd:t.pwd host (fun phys ->
-          if rollback then Rollback.rollback_pool phys else Rollback.ensure_pool_snapshot phys )
+          if rollback then Rollback.rollback_pool phys else 
+            Context.step phys "ensure pool has snapshot" Rollback.ensure_pool_snapshot)
   | None -> Lwt.return_unit
 
 
@@ -124,3 +125,8 @@ let bonding ~common ~sdocs ~exits =
   let doc = "Run bonding tests" in
   let main () config = lwt_main config Cmd_bonding.run in
   Term.(const main $ common $ config), Term.info "bonding" ~doc ~sdocs ~exits
+
+let deployment ~common ~sdocs ~exits =
+  let doc = "Configure deployment, takes a xenrt deployment JSON as input" in
+  let main () = Lwt_main.run (Testarossa.Deployment.run ()) in
+  Term.(const main $ common), Term.info "deployment" ~doc ~sdocs ~exits

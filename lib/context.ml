@@ -136,6 +136,8 @@ let with_login ?(timeout= 60.0) ~uname ~pwd master f =
     (fun () -> f result)
     (fun () -> step result "logout" (fun ctx -> rpc ctx Session.logout))
 
+let this_host ctx =
+  rpc ctx @@ Session.get_this_host ~self:(snd ctx)
 
 let get_host_pp ctx self =
   let name = rpc ctx @@ Host.get_name_label ~self and ip = rpc ctx @@ Host.get_address ~self in

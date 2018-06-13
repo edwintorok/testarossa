@@ -235,7 +235,7 @@ let get_master ~uname ~pwd ip =
            debug (fun m -> m "Host %a is a master" Ipaddr.V4.pp_hum ip) ;
            Lwt.return ip ) )
     (function
-      | Api_errors.Server_error ("HOST_IS_SLAVE", [master]) ->
+      | Api_errors.Server_error (code, [master]) when code = Api_errors.host_is_slave ->
         let master = Ipaddr.V4.of_string_exn master in
         debug (fun m ->
             m "Host %a is a slave of %a" Ipaddr.V4.pp_hum ip Ipaddr.V4.pp_hum master ) ;

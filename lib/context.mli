@@ -27,6 +27,8 @@ val get_host_pp : session -> API.ref_host -> host Lwt.t
 
 val get_pool_master : session -> (API.ref_pool * API.ref_host) Lwt.t
 
+val this_host : session -> API.ref_host Lwt.t
+
 module PP : sig
   val dict : (string * string) list Fmt.t
 

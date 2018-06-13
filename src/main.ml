@@ -66,4 +66,5 @@ let () =
       ; Cmd_init.list ~sdocs ~exits ~common
       ; Cmd_lwt.run ~sdocs ~exits ~common
       ; Cmd_lwt.bonding ~sdocs ~exits ~common
+      ; Cmd_lwt.deployment ~sdocs ~exits ~common
       ])

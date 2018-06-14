@@ -59,10 +59,29 @@ let clear_crashes conf =
       Lwt_list.iter_p (fun self ->
           Context.rpc ctx @@ Host_crashdump.destroy ~self))
 
+let clustering conf =
+  Deployment.with_virtual_master conf "Enable clustering" (fun ctx ->
+      Test_sr.enable_clustering ctx
+      >>= fun _cluster ->
+      Lwt.return_unit
+  )
+
+let reboot conf =
+  let open Context in
+  let open Xen_api_lwt_unix in
+  Deployment.with_virtual_master conf "Reboot pool" (fun ctx ->
+      rpc ctx Host.get_all >>= fun hosts ->
+      Lwt_list.iter_p (fun host -> rpc ctx @@ Host.disable ~host) hosts
+      >>= fun () ->
+      (* TODO: slaves first then master *)
+      Lwt_list.iter_p (fun host -> rpc ctx @@ Host.reboot ~host) hosts)
+
 let suite = [
   "basic", [
-    bracket "clear crashdumps" clear_crashes;
-    bracket "destroy pools" destroy_pools
+      bracket "clear crashdumps" clear_crashes
+    ; bracket "destroy pools" destroy_pools
+    ; bracket "enable clustering" clustering
+    ; bracket "reboot all hosts" reboot
   ]
 ]
 

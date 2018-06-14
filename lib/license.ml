@@ -51,9 +51,7 @@ let maybe_license_host ctx conf self =
     rpc ctx @@ Host.apply_edition ~host:self ~edition:conf.license_edition ~force:true )
 
 
-let maybe_apply_license_pool t conf required =
-  step t "Applying license to pool"
-  @@ fun ctx ->
+let maybe_apply_license_pool ctx conf required =
   get_pool_master ctx
   >>= fun (pool, master) ->
   maybe_license_host ctx conf master

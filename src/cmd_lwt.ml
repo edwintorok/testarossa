@@ -43,9 +43,11 @@ let do_prepare conf ~rollback ~clear_crashdumps =
   (if clear_crashdumps then do_clear_crashdumps t
   else Lwt.return_unit)
   >>= fun () ->
-  License.maybe_apply_license_pool t conf [Features.HA; Features.Corosync]
+  Context.step t "licensing" @@ fun ctx ->
+  License.maybe_apply_license_pool ctx conf [Features.HA; Features.Corosync]
   >>= fun () ->
-  Test_sr.enable_clustering t
+  Context.step t "enable clustering" @@ fun ctx ->
+  Test_sr.enable_clustering ctx
   >>= fun _cluster ->
   match conf.iscsi with
   | Some iscsi ->

@@ -189,6 +189,12 @@ let forall_physical t msg f = forall t.physical_pool msg f
 let forall_virtual t msg f =
   forall (Some (List.filter is_virtual t.hosts)) msg f
 
+let with_virtual_master t msg f =
+  match List.filter is_virtual t.hosts with
+  | [] -> Lwt.fail_with "No vhosts"
+  | lst ->
+    let master = List.find (fun host -> host.access.hostname = "vhost-0") lst in
+    with_host ~default:() master msg f
 
 let ensure_vhost_snapshot t =
   forall_physical t "ensure vhost snapshot exists"

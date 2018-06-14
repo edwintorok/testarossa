@@ -89,9 +89,11 @@ let ensure_bonding_on_master conf =
 let do_prepare conf =
   let master = List.hd conf.hosts |> Ipaddr.V4.to_string in
   Context.with_login ~uname:conf.uname ~pwd:conf.pwd master (fun t ->
-  License.maybe_apply_license_pool t conf [Features.HA; Features.Corosync]
+  step t "licensing" @@ fun ctx ->
+  License.maybe_apply_license_pool ctx conf [Features.HA; Features.Corosync]
   >>= fun () ->
-  Test_sr.enable_clustering t
+  step t "enable clustering" @@ fun ctx ->
+  Test_sr.enable_clustering ctx
   >>= fun _cluster ->
   (match conf.iscsi with
   | Some iscsi ->

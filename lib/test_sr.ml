@@ -5,9 +5,7 @@ let get_management_pifs ctx =
   rpc ctx PIF.get_all >>= Lwt_list.filter_p (fun self -> rpc ctx @@ PIF.get_management ~self)
 
 
-let enable_clustering t =
-  step t "Enable clustering"
-  @@ fun ctx ->
+let enable_clustering ctx =
   debug (fun m -> m "Checking for existing cluster on pool") ;
   rpc ctx Cluster.get_all
   >>= function

@@ -265,11 +265,14 @@ let choose_master masters =
   | [], _ -> None
 
 
-let wait_enabled ctx () =
+let wait_enabled ctx =
   rpc ctx Host.get_all_records
   >>= fun hrecs ->
   debug (fun m -> m "Waiting for all hosts to be enabled in the pool") ;
   let rec loop () =
+    rpc ctx @@ Host.is_in_emergency_mode >>= function
+    | true -> Lwt.fail_with "Host is in emergency mode"
+    | false ->
     Lwt_list.exists_p
       (fun (host, hr) ->
          rpc ctx @@ Host.get_enabled ~self:host
@@ -353,7 +356,7 @@ let make_pool ~uname ~pwd conf ips =
     >>= fun () ->
     with_login ~uname ~pwd (Ipaddr.V4.to_string master) (fun t ->
         step t "Wait enabled" (fun ctx ->
-            wait_enabled ctx ()
+            wait_enabled ctx
             >>= fun () ->
             fix_management_interfaces ctx
             >>= fun () ->

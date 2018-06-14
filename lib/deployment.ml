@@ -177,15 +177,66 @@ let initialize t =
   >>= fun hosts -> Lwt.return {t with physical_pool; hosts}
 
 
-let ensure_vhost_snapshot t =
-  match t.physical_pool with
+let forall t msg f =
+  match t with
   | None -> Lwt.return_unit
   | Some lst ->
-      Lwt_list.iter_p
-        (fun host ->
-          with_host ~default:() host "ensure vhost snapshot"
-            Rollback.ensure_pool_snapshot )
-        lst
+      Lwt_list.iter_p (fun host -> with_host ~default:() host msg f) lst
+
+
+let forall_physical t msg f = forall t.physical_pool msg f
+
+let forall_virtual t msg f =
+  forall (Some (List.filter is_virtual t.hosts)) msg f
+
+
+let ensure_vhost_snapshot t =
+  forall_physical t "ensure vhost snapshot exists"
+    Rollback.ensure_pool_snapshot
+
+
+let ensure_vm_on ctx (vm, vmr) =
+  match vmr.API.vM_power_state with
+  | `Halted -> rpc ctx @@ VM.start ~start_paused:false ~force:false ~vm
+  | `Paused -> rpc ctx @@ VM.hard_reboot ~vm
+  | `Suspended -> rpc ctx @@ VM.resume ~start_paused:false ~force:false ~vm
+  | _ -> Lwt.return_unit
+
+
+let ensure_vhosts_on t =
+  forall_physical t "ensure vhosts online" (fun ctx ->
+      Rollback.list_vms ctx >>= Lwt_list.iter_p (ensure_vm_on ctx) )
+  >>= fun () ->
+  debug (fun m -> m "all vhosts running") ;
+  forall_virtual t "all vhosts are enabled" Test_sr.wait_enabled
+
+
+let pp_crashdump ppf (hostname, crashdump) =
+  Fmt.pf ppf "Host: %s, Date: %a, Size: %Ld" hostname
+    Fmt.(using Xapi_stdext_date.Date.to_string string)
+    crashdump.API.host_crashdump_timestamp crashdump.API.host_crashdump_size
+
+
+let check_crashdumps ctx =
+  rpc ctx Host_crashdump.get_all_records
+  >>= function
+    | [] ->
+        debug (fun m -> m "No crashdumps, good") ;
+        Lwt.return_unit
+    | crashdumps ->
+        debug (fun m -> m "Found %d crashdumps" (List.length crashdumps)) ;
+        crashdumps
+        |> Lwt_list.map_p (fun (_, crashdump) ->
+               rpc ctx
+               @@ Host.get_name_label ~self:crashdump.API.host_crashdump_host
+               >>= fun host -> Lwt.return (host, crashdump) )
+        >>= fun crashdumps ->
+        err (fun m ->
+            m "Found crashdumps: %a" (Fmt.Dump.list pp_crashdump) crashdumps ) ;
+        Lwt.return_unit
+
+let check_vhost_crashdumps conf =
+  forall_virtual conf "check crashdumps" check_crashdumps
 
 let run () =
   of_file "job.json"

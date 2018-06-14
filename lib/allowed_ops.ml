@@ -41,27 +41,6 @@ module Make (B : BEHAVIOUR) : S = struct
 
   let pp_operation = Fmt.using B.rpc_of_operation PP.rpc_t
 
-  let pp_crashdump ppf (hostname, crashdump) =
-    Fmt.pf ppf "Host: %s, Date: %a, Size: %Ld" hostname
-      Fmt.(using Xapi_stdext_date.Date.to_string string)
-      crashdump.API.host_crashdump_timestamp
-      crashdump.API.host_crashdump_size
-
-  let check_crashdumps ctx () =
-    rpc ctx Host_crashdump.get_all_records >>= function
-    | [] ->
-      debug (fun m -> m "No crashdumps, good");
-      Lwt.return_unit
-    | crashdumps ->
-      debug (fun m -> m "Found %d crashdumps" (List.length crashdumps));
-      crashdumps
-      |> Lwt_list.map_p (fun (_, crashdump) ->
-          rpc ctx @@ Host.get_name_label ~self:crashdump.API.host_crashdump_host >>= fun host ->
-          Lwt.return (host, crashdump))
-      >>= fun crashdumps ->
-      err (fun m -> m "Found crashdumps: %a" (Fmt.Dump.list pp_crashdump) crashdumps);
-      Lwt.return_unit
-
   let execute ?(skip_serial=false) t =
     step t B.name
     @@ fun ctx ->
@@ -106,15 +85,14 @@ module Make (B : BEHAVIOUR) : S = struct
        >>= fun all ->
        debug (fun m -> m "Performing operations serially on %d objects" (List.length all)) ;
        Lwt_list.iter_s perform_allowed all
-       >>= fun () ->
-       check_crashdumps ctx ())
+       >>= fun () -> Deployment.check_crashdumps ctx)
     >>= fun () ->
     rpc ctx B.get_all
     >>= fun all ->
     debug (fun m -> m "Performing operations in parallel") ;
     Lwt.finalize (fun () ->
         Lwt_list.iter_p perform_allowed all)
-      (check_crashdumps ctx)
+      (fun () -> Deployment.check_crashdumps ctx)
 end
 
 module Cluster_host_test = struct

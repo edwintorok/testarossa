@@ -32,7 +32,7 @@ let do_rollback conf =
   let master = List.hd conf.hosts |> Ipaddr.V4.to_string in
   Context.with_login ~uname:conf.uname ~pwd:conf.pwd master (fun t ->
       Context.step t "Wait for all hosts to be enabled" @@ fun ctx ->
-      Test_sr.wait_enabled ctx ())
+      Test_sr.wait_enabled ctx)
 
 let do_prepare conf ~rollback ~clear_crashdumps =
   handle_rollback conf ~rollback

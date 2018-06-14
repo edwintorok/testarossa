@@ -77,7 +77,13 @@ let wrap_rpc dest f call =
     info (fun m -> m ~header "%d<[+%a] %a" this_id Mtime.Span.pp dt Fmt.exn err);
     Lwt.fail err
   in
-  Lwt.try_bind (fun () -> f call) on_reply on_error
+  let rec progress () =
+    Lwt_unix.sleep 5.0 >>= fun () ->
+    debug (fun m -> m ~header "%d... %a" this_id PP.rpc_call call);
+    progress ()
+  in
+  Lwt.try_bind (fun () ->
+      Lwt.pick [ f call; progress () ]) on_reply on_error
 
 
 let get_pool_master t =

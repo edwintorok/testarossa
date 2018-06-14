@@ -208,7 +208,16 @@ let ensure_vhosts_on t =
       Rollback.list_vms ctx >>= Lwt_list.iter_p (ensure_vm_on ctx) )
   >>= fun () ->
   debug (fun m -> m "all vhosts running") ;
-  forall_virtual t "all vhosts are enabled" Test_sr.wait_enabled
+  let rec loop () =
+    Lwt.catch
+      (fun () -> forall_virtual t "all vhosts are enabled" Test_sr.wait_enabled)
+      (function
+          | Unix.Unix_error (_, _, _) as e ->
+              debug (fun m -> m "Ignoring exception %a" Fmt.exn e) ;
+              loop ()
+          | e -> Lwt.fail e)
+  in
+  loop ()
 
 
 let pp_crashdump ppf (hostname, crashdump) =
@@ -227,16 +236,25 @@ let check_crashdumps ctx =
         debug (fun m -> m "Found %d crashdumps" (List.length crashdumps)) ;
         crashdumps
         |> Lwt_list.map_p (fun (_, crashdump) ->
-               rpc ctx
-               @@ Host.get_name_label ~self:crashdump.API.host_crashdump_host
-               >>= fun host -> Lwt.return (host, crashdump) )
+               Lwt.catch
+                 (fun () ->
+                   rpc ctx
+                   @@ Host.get_name_label
+                        ~self:crashdump.API.host_crashdump_host
+                   >>= fun host -> Lwt.return (host, crashdump) )
+                 (fun _ ->
+                   Lwt.return
+                     ( Ref.string_of crashdump.API.host_crashdump_host
+                     , crashdump ) ) )
         >>= fun crashdumps ->
         err (fun m ->
             m "Found crashdumps: %a" (Fmt.Dump.list pp_crashdump) crashdumps ) ;
         Lwt.return_unit
 
+
 let check_vhost_crashdumps conf =
   forall_virtual conf "check crashdumps" check_crashdumps
+
 
 let run () =
   of_file "job.json"

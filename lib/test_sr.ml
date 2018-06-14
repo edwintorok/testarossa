@@ -34,7 +34,7 @@ let enable_clustering t =
     get_management_pifs ctx
     >>= function
     | [] -> Lwt.fail_with "No management interface found"
-    | pif :: _ as pifs ->
+    | pif :: _->
       rpc ctx @@ PIF.get_network ~self:pif
       >>= fun network ->
       debug (fun m -> m "Creating cluster on pool") ;
@@ -364,39 +364,43 @@ let make_pool ~uname ~pwd conf ips =
                 m "All hosts enabled in the pool, master is: %a" Ipaddr.V4.pp_hum master ) ;
             Lwt.return t ) )
 
+let destroy_pool ctx =
+  Context.this_host ctx >>= fun this_host ->
+  rpc ctx @@ VM.get_all_records
+  >>= fun vms ->
+  Lwt_list.iter_p (fun (vm, vmr) ->
+      if vmr.API.vM_power_state <> `Halted && not vmr.API.vM_is_control_domain then
+        rpc ctx @@ VM.hard_shutdown ~vm
+      else Lwt.return_unit
+    ) vms
+  >>= fun () ->
+  rpc ctx @@ PBD.get_all_records
+  >>= Lwt_list.iter_p (fun (pbd, pbdr) ->
+      if pbdr.API.pBD_currently_attached then
+        rpc ctx @@ PBD.unplug ~self:pbd
+      else Lwt.return_unit)
+  >>= fun () ->
+  rpc ctx @@ Cluster.get_all
+  >>= Lwt_list.iter_s (fun self ->
+      rpc ctx @@ Cluster.pool_force_destroy ~self)
+  >>= fun () ->
+  rpc ctx @@ Host.get_all_records
+  >>= Lwt_list.iter_s (fun (host, hostr) ->
+      debug (fun m -> m "Host %s is %s" (Ref.string_of host) hostr.API.host_name_label);
+      if host <> this_host then
+        rpc ctx @@ Pool.eject ~host
+      else Lwt.return_unit)
+
 let destroy_pools ~uname ~pwd ips =
-  let destroy_pool master =
-    let ipstr = Ipaddr.V4.to_string master in
-    with_login ~uname ~pwd ipstr (fun t ->
-        step t (Printf.sprintf "Unplug PBDs on %s" ipstr) (fun ctx ->
-            rpc ctx @@ PBD.get_all_records
-            >>= Lwt_list.iter_p (fun (pbd, pbdr) ->
-                if pbdr.API.pBD_currently_attached then
-                  rpc ctx @@ PBD.unplug ~self:pbd
-                else Lwt.return_unit
-             )
-        ) >>= fun () ->
-        step t (Printf.sprintf "Destroy cluster if any on %s" ipstr) (fun ctx ->
-            rpc ctx @@ Cluster.get_all
-            >>= Lwt_list.iter_s (fun self ->
-                rpc ctx @@ Cluster.pool_force_destroy ~self
-              )
-        ) >>= fun () ->
-        step t (Printf.sprintf "Pool eject on %s's pool" ipstr) @@ fun ctx ->
-        rpc ctx @@ Host.get_all_records
-        >>= Lwt_list.iter_s (fun (host, hostr) ->
-          debug (fun m -> m "Host %s is %s" (Ref.string_of host) hostr.API.host_name_label);
-          if hostr.API.host_address <> ipstr then
-            rpc ctx @@ Pool.eject ~host
-          else Lwt.return_unit
-        )
-      )
-  in
   debug (fun m -> m "Destroying pool(s)");
   Lwt_list.map_p (get_master ~uname ~pwd) ips
   >>= fun masters ->
   List.sort_uniq Ipaddr.V4.compare masters
-  |> Lwt_list.iter_p destroy_pool
+  |> Lwt_list.iter_p (fun master ->
+    let ipstr = Ipaddr.V4.to_string master in
+    with_login ~uname ~pwd ipstr (fun t ->
+        step t "destroy pool" destroy_pool)
+  )
 
 let find_templates ctx label =
   rpc ctx @@ VM.get_by_name_label ~label
